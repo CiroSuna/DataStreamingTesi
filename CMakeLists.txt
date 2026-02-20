@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Aggiungi i file sorgenti
 add_executable(start
     src/main.cpp
+    src/threadPool.cpp
 )
 
 # Includi la directory per gli header
