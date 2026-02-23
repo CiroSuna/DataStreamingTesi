@@ -4,8 +4,9 @@ project(DataStreaming CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Trova la libreria ZeroMQ
+# Richiesta delle librerie necessarie
 find_package(cppzmq REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 # Eseguibile principale (orchestratore)
 add_executable(start

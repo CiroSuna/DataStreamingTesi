@@ -3,7 +3,6 @@
 #include <mutex>
 #include "threadPool.hpp"
 
-// Constructor implementation
 ThreadPool::ThreadPool(int initial_threads) 
     : active_threads{0}, destroy_count{0}, stop{false} {
     for (size_t i{}; i < initial_threads; ++i) {
@@ -11,7 +10,6 @@ ThreadPool::ThreadPool(int initial_threads)
     }
 }
 
-// Shutdown implementation
 void ThreadPool::shutdown() {
     std::unique_lock<std::mutex> lock(pool_mtx);
     stop = true;
@@ -28,9 +26,14 @@ ThreadPool::~ThreadPool() {
 }
 
 // Add task implementation
-void ThreadPool::add_task(std::function<void()> f) {
-    std::unique_lock<std::mutex> lock{pool_mtx};
-    task_queue.push(f);
+template<typename F, typename... Args>
+void ThreadPool::add_task(F&& f, Args&&... args) {
+
+    auto task = [f_forwarded = std::forward<F>(f), args_forwarded = std::make_tuple(std::forward<Args>(args)...)]() {
+        std::apply(f_forwarded, args_forwarded);
+    };
+
+    task_queue.push(task);
     pool_notify.notify_all();
 }
 
@@ -40,7 +43,6 @@ std::function<void()> ThreadPool::fetch_task_unlocked() {
         return nullptr;
     }
 
-    // std::move used for efficiency, not creating a copy but just moving the data
     auto task{std::move(task_queue.front())}; 
     task_queue.pop();
     return task;

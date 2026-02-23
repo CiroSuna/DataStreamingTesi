@@ -19,14 +19,15 @@ class ThreadPool {
         std::mutex pool_mtx;
         std::condition_variable pool_notify;
         void thrd_task_loop();
-        // Helper function - must be called while holding pool_mtx lock
+        // Helper function - must be called while holding pool_mtx lock, remains void since lambda inside taks queue is [](){...} with no return
         std::function<void()> fetch_task_unlocked();
 
     public:
         ThreadPool(int initial_threads);
         void shutdown();
         ~ThreadPool();
-        void add_task(std::function<void()> f);
+        template<typename F, typename... Args>
+        void add_task(F&& f, Args&&... args);
         void destroy_n_threads(int n);
 };
 
