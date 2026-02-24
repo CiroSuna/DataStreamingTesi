@@ -15,7 +15,6 @@ void ThreadPool::shutdown() {
     stop = true;
 }
 
-// Destructor implementation
 ThreadPool::~ThreadPool() {
     shutdown();
     pool_notify.notify_all();
@@ -23,18 +22,6 @@ ThreadPool::~ThreadPool() {
         if (thrd_list[i].joinable())
             thrd_list[i].join();
     }
-}
-
-// Add task implementation
-template<typename F, typename... Args>
-void ThreadPool::add_task(F&& f, Args&&... args) {
-
-    auto task = [f_forwarded = std::forward<F>(f), args_forwarded = std::make_tuple(std::forward<Args>(args)...)]() {
-        std::apply(f_forwarded, args_forwarded);
-    };
-
-    task_queue.push(task);
-    pool_notify.notify_all();
 }
 
 // Fetch task implementation (MUST be called while holding pool_mtx lock)

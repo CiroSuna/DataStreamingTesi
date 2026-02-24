@@ -27,7 +27,15 @@ class ThreadPool {
         void shutdown();
         ~ThreadPool();
         template<typename F, typename... Args>
-        void add_task(F&& f, Args&&... args);
+        void add_task(F&& f, Args&&... args) {
+            std::unique_lock<std::mutex> lock{pool_mtx};
+            auto task = [f_forwarded = std::forward<F>(f), 
+                         args_forwarded = std::make_tuple(std::forward<Args>(args)...)]() {
+                std::apply(f_forwarded, args_forwarded);
+            };
+            task_queue.push(task);
+            pool_notify.notify_all();
+        }
         void destroy_n_threads(int n);
 };
 

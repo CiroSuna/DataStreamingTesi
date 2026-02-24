@@ -1,5 +1,7 @@
 #include <iostream>
+#include <cstdio>
 #include <zmq.hpp>
+#include <unistd.h>
 #include "dataTypes.hpp"
 
 
@@ -18,11 +20,15 @@ int main(int argc, char* argv[]) {
     zmq::socket_t orchestrator {ctx, zmq::socket_type::sub};
     
     // Bind to push socket for workerA
+    std::remove(ipc_filepath.c_str());
     send_to.bind(ipc_filepath);
+    orchestrator.connect(argv[3]); 
     
+    sleep(1); 
     data d {10}; 
     zmq::message_t msg {sizeof(data)};
     std::memcpy(msg.data(), &d, sizeof(data));
+    sleep(1);
     send_to.send(msg, zmq::send_flags::none);
     std::cout << "dato inviato a workerA: " << d.curr_value << '\n'; 
     
