@@ -17,6 +17,7 @@ enable_testing()
 add_executable(start
     main.cpp
     common/threadPool.cpp
+    common/utils.cpp
 )
 target_include_directories(start PRIVATE include)
 target_link_libraries(start PRIVATE cppzmq)

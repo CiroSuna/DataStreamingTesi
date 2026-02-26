@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
+#include "utils.hpp"
 
 void process_starter(const std::string& process_name, const std::string& in_socket, const std::string& out_socket, const std::string& orchestrator_ipc){
     pid_t new_proc {fork()};
@@ -19,41 +20,90 @@ void process_starter(const std::string& process_name, const std::string& in_sock
     }
 }
 
+void on_sigint(int) {
+    kill(0, SIGTERM);
+}
+
 int main(int argc, char const *argv[]){
+    signal(SIGINT, on_sigint);
 
-    // TODO: Scegliere come gestire il passaggio dei socket tra i vari processi (file configurazione, passarli con exec, o hardcoded)
-    const char* orchestrator_ipc_file {"/tmp/orchestrator.ipc"};
-    std::string orchestrator_ipc_path {"ipc:///tmp/orchestrator.ipc"};
-    zmq::context_t ctx{};
+    // Cleanup for old ipc files in tmp
+    cleanup_ipc_path(ipc_paths::orchestrator());
+    cleanup_ipc_path(ipc_paths::sync_socket_path());
+    cleanup_ipc_path(ipc_paths::sender_to_workerA());
+    cleanup_ipc_path(ipc_paths::workerA_to_workerB());
+    cleanup_ipc_path(ipc_paths::workerB_to_sink());
+
+    process_starter("workerA", ipc_paths::sender_to_workerA(), ipc_paths::workerA_to_workerB(), ipc_paths::orchestrator());
+    process_starter("workerB", ipc_paths::workerA_to_workerB(), ipc_paths::workerB_to_sink(), ipc_paths::orchestrator());
+    process_starter("sink", ipc_paths::workerB_to_sink(), "", ipc_paths::orchestrator());
+    process_starter("sender", "", ipc_paths::sender_to_workerA(), ipc_paths::orchestrator()); 
+
+
+    // Starting context, sockets and binding FIRST
+    zmq::context_t ctx {};
     zmq::socket_t orchestrator {ctx, zmq::socket_type::pub};
-    std::remove(orchestrator_ipc_file);
-    orchestrator.bind(orchestrator_ipc_path);
+    zmq::socket_t sync_socket {ctx, zmq::socket_type::rep};
 
-    // Zmq endpoints and socket names definitions
-    const std::string sender_to_workerA {"ipc:///tmp/workA.ipc"};
-    const std::string workerA_to_workerB {"ipc:///tmp/workb.ipc"};
-    const std::string workerb_to_sink {"ipc:///tmp/sink.ipc"}; 
-    
-    // starting processes, sender last to make sure every process iin pipe is set up
-    process_starter("workera", sender_to_workerA, workerA_to_workerB, orchestrator_ipc_path);
-    process_starter("workerb", workerA_to_workerB, workerb_to_sink, orchestrator_ipc_path);
-    process_starter("sink", workerb_to_sink, "", orchestrator_ipc_path);
-    process_starter("sender", "", sender_to_workerA, orchestrator_ipc_path);
-
-    // TEST MESSAGE
-    sleep(1);  // Attendi che i subscriber si connettano
-    
-    while (true) {
-        update_ms update_msg {update_type::THREAD_INC, 5};
+    try {
+        orchestrator.bind(ipc_paths::orchestrator());
+        sync_socket.bind(ipc_paths::sync_socket_path());
         
-        zmq::message_t msg {sizeof(update_ms)};
-        std::memcpy(msg.data(), &update_msg, sizeof(update_ms)); 
-        
-        zmq::message_t topic{"[WorkA]"};
-        orchestrator.send(topic, zmq::send_flags::sndmore);
-        orchestrator.send(msg, zmq::send_flags::none);
-        sleep(1);
+        // Set receive timeout to avoid deadlock (5 seconds)
+        sync_socket.set(zmq::sockopt::rcvtimeo, 5000);
     }
+    catch (const zmq::error_t& e) {
+        std::cerr << "orchestrator: " << e.what() << '\n';
+        exit(EXIT_FAILURE);
+    }
+
+    
+    std::cout << "Main: Starting to wait for READY messages...\n" << std::flush;
+
+    // TODO: evaluate to put sync logic inside a funciotn for more code readability
+    // SYNC logic
+    constexpr int expected {4};
+    int ready_count {0};
+    while (ready_count < expected) {
+        zmq::message_t msg;
+        try {
+            auto res = sync_socket.recv(msg, zmq::recv_flags::none);
+            if (!res.has_value()) {
+                std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << "\n";
+                exit(EXIT_FAILURE);
+            }
+            std::string r {static_cast<char*>(msg.data()), msg.size()};
+            std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
+            if (r == "READY") {
+                ++ready_count;
+                std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
+                sync_socket.send(zmq::message_t("GO", 2), zmq::send_flags::none);
+            }
+        }
+        catch (const zmq::error_t& e) {
+            std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << "\n";
+            exit(EXIT_FAILURE);
+        }
+    }
+    // End sync logic
+
+    
+    std::cout << "All process sync and in exection\n";
+
+    // Remove timeout for the final blocking recv from sink
+    // sync_socket.set(zmq::sockopt::rcvtimeo, -1);
+
+    zmq::message_t msg_final;
+    auto res_final = sync_socket.recv(msg_final, zmq::recv_flags::none);
+    if (!res_final.has_value()) {
+        std::cerr << "Error: no final message from sink\n";
+        exit(EXIT_FAILURE);
+    }
+    std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
+    std::cout << "sink: " << final_str << " dato arrivato al sink\n";
+    sync_socket.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+
+    sync_socket.close(); 
     orchestrator.close();
     return 0;
 }

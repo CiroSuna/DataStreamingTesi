@@ -3,37 +3,43 @@
 #include <zmq.hpp>
 #include <unistd.h>
 #include "dataTypes.hpp"
-
+#include "utils.hpp"
 
 
 
 int main(int argc, char* argv[]) {
-    if (argc < 3) {
+    if (argc < 4) {
         std::cerr << ("Arguments not well formed");
         return 1;
     }
-     
     
-    std::string ipc_filepath {argv[2]};
     zmq::context_t ctx {};
-    zmq::socket_t send_to {ctx, zmq::socket_type::push};
-    zmq::socket_t orchestrator {ctx, zmq::socket_type::sub};
+    zmq::socket_t orchestrator_sub {ctx, zmq::socket_type::sub};
+    zmq::socket_t send_to_A {ctx, zmq::socket_type::push};
+    zmq::socket_t sync_socket {ctx, zmq::socket_type::req};
     
-    // Bind to push socket for workerA
-    std::remove(ipc_filepath.c_str());
-    send_to.bind(ipc_filepath);
-    orchestrator.connect(argv[3]); 
+    try {
+        orchestrator_sub.connect(ipc_paths::orchestrator());
+        send_to_A.connect(ipc_paths::sender_to_workerA());
+        sync_socket.connect(ipc_paths::sync_socket_path());
+    }
+    catch (zmq::error_t& e) {
+        std::cerr << "sender: " << e.what() << '\n';
+        exit(EXIT_FAILURE);
+    }
+
+    if (!sync_with_orchestrator(sync_socket, std::string("sender"))) {
+        exit(EXIT_FAILURE);
+    }
+
+    // TEST send
+    data d{10};
+    send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+    std::cout << "Sender: dato mandato verso A\n" << std::flush;
     
-    sleep(1); 
-    data d {10}; 
-    zmq::message_t msg {sizeof(data)};
-    std::memcpy(msg.data(), &d, sizeof(data));
-    sleep(1);
-    send_to.send(msg, zmq::send_flags::none);
-    std::cout << "dato inviato a workerA: " << d.curr_value << '\n'; 
-    
-    
-    send_to.close();
-    orchestrator.close();
+
+    orchestrator_sub.close();
+    send_to_A.close();
+    sync_socket.close();
     return 0;
 }

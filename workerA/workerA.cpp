@@ -3,6 +3,7 @@
 #include <zmq.hpp>
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
+#include "utils.hpp"
 
 int main(int argc, char* argv[]) {
     if (argc < 4) {
@@ -14,62 +15,50 @@ int main(int argc, char* argv[]) {
     std::string to_workerB_path {argv[2]}; 
     std::string orchestrator_ipc_sub {argv[3]};
 
+
+    std::cout << "WorkerA: Starting...\n";
+    
     zmq::context_t ctx {};
-    zmq::socket_t rcv_from {ctx, zmq::socket_type::pull};
-    zmq::socket_t send_to {ctx, zmq::socket_type::push};
     zmq::socket_t orchestrator_sub {ctx, zmq::socket_type::sub};
+    zmq::socket_t sync_socket {ctx, zmq::socket_type::req};
+    zmq::socket_t recv_from_sender {ctx, zmq::socket_type::pull};
+    zmq::socket_t send_to_workerB {ctx, zmq::socket_type::push};
 
-    std::remove(to_workerB_path.c_str());
-    send_to.bind(to_workerB_path);
-    rcv_from.connect(ipc_filepath);
-    orchestrator_sub.set(zmq::sockopt::subscribe, "[WorkA]");
-    orchestrator_sub.connect(orchestrator_ipc_sub);
+    std::cout << "WorkerA: Sockets created\n";
 
-    // TODO: Implementare logica workerA con threadPool
-   
-    
-    zmq::pollitem_t items[] {
-        {rcv_from, 0, ZMQ_POLLIN, 0},
-        {orchestrator_sub, 0, ZMQ_POLLIN, 0}
-    };
+    try {
+        orchestrator_sub.connect(orchestrator_ipc_sub);
+        sync_socket.connect(ipc_paths::sync_socket_path());
+        recv_from_sender.bind(ipc_filepath);
+        send_to_workerB.connect(to_workerB_path);
 
-    // Poll loop
-    while (true){
-        zmq::message_t msg {sizeof(data)};
-        zmq::message_t orchestrator_msg {sizeof(update_ms)};
-        zmq::poll(items, 2, std::chrono::seconds(1));
+        // Set topic
+        orchestrator_sub.set(zmq::sockopt::subscribe, topics::WORKERA);
+        std::cout << "WorkerA: All connections established\n" << std::flush;
+    }
+    catch (const zmq::error_t& e) {
+        std::cerr << "workerA: " << e.what() << '\n';
+        exit(EXIT_FAILURE);
+    }
 
-        if (items[0].revents & ZMQ_POLLIN) {
-            rcv_from.recv(msg);
-            std::cout << "A: messaggio ricevuto da sender\n";
-            data d{}; 
-            std::memcpy(&d, msg.data(), sizeof(data));
+    // Sync with orchestrator
+    if (!sync_with_orchestrator(sync_socket, "workerA")) {
+        exit(EXIT_FAILURE);
+    }
 
-            std::cout << "A: Dato ricevuto da sender: " << d.curr_value << '\n';
+    std::cout << "WorkerA: synchronized and ready\n";
 
-            send_to.send(msg, zmq::send_flags::none);
+    zmq::message_t msg {};
+    recv_from_sender.recv(msg);
+    data d;
+    memcpy(&d, msg.data(), sizeof(data));
+    std::cout << "WorkerA: received data = " << d.curr_value << '\n' << std::flush;
+    send_to_workerB.send(msg, zmq::send_flags::none);
 
-        }
-        if (items[1].revents & ZMQ_POLLIN) {
 
-            zmq::message_t topic {};
-            
-            orchestrator_sub.recv(topic, zmq::recv_flags::none);
-            
-            // Verifica se c'è un secondo frame (multipart message)
-            if (orchestrator_sub.get(zmq::sockopt::rcvmore)) {
-                orchestrator_sub.recv(msg, zmq::recv_flags::none);
-                
-                update_ms up {};
-                std::memcpy(&up, msg.data(), sizeof(update_ms));
-                std::cout << "Tipo=" << up.t << " Resize=" << up.resize << '\n';
-            }
-        }
-
-    } 
-    
-    rcv_from.close();
-    send_to.close();
     orchestrator_sub.close();
+    sync_socket.close();
+    recv_from_sender.close();
+    send_to_workerB.close();
     return 0;
 }
