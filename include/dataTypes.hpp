@@ -23,10 +23,12 @@ namespace topics {
     constexpr const char* WORKERA = "[WorkA]";
     constexpr const char* WORKERB = "[WorkB]";
     constexpr const char* SYNC = "[Sync]";
+    constexpr const char* GLOBAL = "[Global]";
 
     inline std::string workera_topic() { return WORKERA; }
     inline std::string workerb_topic() { return WORKERB; }
     inline std::string sync_topic() { return SYNC; }
+    inline std::string global_topic() { return GLOBAL; }
 }
 
 enum update_type{
@@ -39,6 +41,7 @@ struct data{
     int original_value{};
     data(int _x) : curr_value{_x}, original_value{_x} {}
     data() : curr_value{}, original_value{} {}
+    data(data& d) : curr_value{d.curr_value}, original_value {d.original_value} {}
 };
 
 struct update_ms {

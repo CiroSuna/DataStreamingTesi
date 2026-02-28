@@ -6,7 +6,9 @@
 #include "dataTypes.hpp"
 #include "utils.hpp"
 
-void process_starter(const std::string& process_name, const std::string& in_socket, const std::string& out_socket, const std::string& orchestrator_ipc){
+#define PIPE_LENGTH 4
+
+pid_t process_starter(const std::string& process_name, const std::string& in_socket, const std::string& out_socket, const std::string& orchestrator_ipc){
     pid_t new_proc {fork()};
     if (new_proc == -1) {
         perror(("Errore fork " + process_name).c_str());
@@ -18,10 +20,14 @@ void process_starter(const std::string& process_name, const std::string& in_sock
         perror(("Errore execl " + process_name).c_str());
         exit(EXIT_FAILURE);
     }
+    
+    return new_proc;
 }
 
 void on_sigint(int) {
     kill(0, SIGTERM);
+    for (size_t i {0}; i < PIPE_LENGTH; i++)
+        waitpid(-1, nullptr, 0);
 }
 
 int main(int argc, char const *argv[]){
@@ -34,11 +40,12 @@ int main(int argc, char const *argv[]){
     cleanup_ipc_path(ipc_paths::workerA_to_workerB());
     cleanup_ipc_path(ipc_paths::workerB_to_sink());
 
-    process_starter("workerA", ipc_paths::sender_to_workerA(), ipc_paths::workerA_to_workerB(), ipc_paths::orchestrator());
-    process_starter("workerB", ipc_paths::workerA_to_workerB(), ipc_paths::workerB_to_sink(), ipc_paths::orchestrator());
-    process_starter("sink", ipc_paths::workerB_to_sink(), "", ipc_paths::orchestrator());
-    process_starter("sender", "", ipc_paths::sender_to_workerA(), ipc_paths::orchestrator()); 
-
+    pid_t p_child[PIPE_LENGTH] {
+        process_starter("workerA", ipc_paths::sender_to_workerA(), ipc_paths::workerA_to_workerB(), ipc_paths::orchestrator()),
+        process_starter("workerB", ipc_paths::workerA_to_workerB(), ipc_paths::workerB_to_sink(), ipc_paths::orchestrator()),
+        process_starter("sink", ipc_paths::workerB_to_sink(), "", ipc_paths::orchestrator()),
+        process_starter("sender", "", ipc_paths::sender_to_workerA(), ipc_paths::orchestrator())
+    };
 
     // Starting context, sockets and binding FIRST
     zmq::context_t ctx {};
@@ -69,8 +76,8 @@ int main(int argc, char const *argv[]){
         try {
             auto res = sync_socket.recv(msg, zmq::recv_flags::none);
             if (!res.has_value()) {
-                std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << "\n";
-                exit(EXIT_FAILURE);
+                std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << ", retrying...\n";
+                continue;
             }
             std::string r {static_cast<char*>(msg.data()), msg.size()};
             std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
@@ -96,14 +103,28 @@ int main(int argc, char const *argv[]){
     zmq::message_t msg_final;
     auto res_final = sync_socket.recv(msg_final, zmq::recv_flags::none);
     if (!res_final.has_value()) {
-        std::cerr << "Error: no final message from sink\n";
+        std::cerr << "Error: timeout waiting for final message from sink\n";
         exit(EXIT_FAILURE);
     }
+
     std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
+
+    if (final_str != "END") {
+        std::cerr << "Error: wrong message recived, expected: END\n";    
+        exit(EXIT_FAILURE);
+    }
+
     std::cout << "sink: " << final_str << " dato arrivato al sink\n";
     sync_socket.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+    
+    orchestrator.send(zmq::message_t(topics::global_topic()), zmq::send_flags::sndmore);
+    orchestrator.send(zmq::message_t("SHUTDOWN", 8), zmq::send_flags::none);
 
-    sync_socket.close(); 
+    // Wait for all children to finish before closing sockets
+    for (size_t i {0}; i < PIPE_LENGTH; i++)
+        waitpid(p_child[i], nullptr, 0);
+
+    sync_socket.close();
     orchestrator.close();
     return 0;
 }

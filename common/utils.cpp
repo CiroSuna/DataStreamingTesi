@@ -7,6 +7,13 @@
 #include <cerrno>
 
 
+void check_zmq_recv(const zmq::recv_result_t& result, const std::string& error_msg) {
+    if (!result.has_value()) {
+        std::cerr << error_msg << '\n';
+        exit(EXIT_FAILURE);
+    }
+}
+
 bool cleanup_ipc_path(const std::string& ipc_path_file) {
     std::filesystem::path p(ipc_path_file);
     if (!p.empty() && std::filesystem::exists(p)) {

@@ -31,6 +31,10 @@ int main(int argc, char* argv[]) {
         sync_socket.connect(ipc_paths::sync_socket_path());
         recv_from_workerA.bind(ipc_filepath);
         send_to_sink.connect(to_sink_path);
+
+        orchestrator_sub.set(zmq::sockopt::subscribe, topics::GLOBAL);
+        recv_from_workerA.set(zmq::sockopt::rcvtimeo, 100);
+        orchestrator_sub.set(zmq::sockopt::rcvtimeo, 100);
         std::cout << "WorkerB: All connections established\n";
     }
     catch (const zmq::error_t& e) {
@@ -45,17 +49,57 @@ int main(int argc, char* argv[]) {
 
     std::cout << "WorkerB: synchronized and ready\n";
 
-    zmq::message_t msg {};
-    recv_from_workerA.recv(msg);
-    data d;
-    memcpy(&d, msg.data(), sizeof(data));
-    std::cout << "WorkerB: received data = " << d.curr_value << '\n' << std::flush;
-    send_to_sink.send(msg, zmq::send_flags::none);
+    zmq::pollitem_t items[] = {
+        { recv_from_workerA, 0, ZMQ_POLLIN, 0 },
+        { orchestrator_sub,  0, ZMQ_POLLIN, 0 }
+    };
+
+    try {
+        while (true) {
+            zmq::poll(items, 2, -1);
+
+            if (items[0].revents & ZMQ_POLLIN) {
+                zmq::message_t msg;
+
+                auto status = recv_from_workerA.recv(msg, zmq::recv_flags::dontwait);
+                if (!status.has_value()) continue;
+
+                data d {};
+                memcpy(&d, msg.data(), sizeof(data));
+                std::cout << "WorkerB: dato ricevuto da workerA: " << d.curr_value << '\n';
+                d.curr_value--;
+
+                send_to_sink.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+            }
+
+            if (items[1].revents & ZMQ_POLLIN) {
+                zmq::message_t topic;
+                zmq::message_t msg;
+
+                auto status = orchestrator_sub.recv(topic, zmq::recv_flags::dontwait);
+                if (!status.has_value()) continue;
+
+                orchestrator_sub.recv(msg);
+
+                std::string r {static_cast<char*>(msg.data()), msg.size()};
+                if (r == "SHUTDOWN") {
+                    std::cout << "Shutdown recived, proceding to close \n";
+                    break;
+                }
+            }
+        }
+    }
+    catch (zmq::error_t& e) {
+        std::cerr << "WorkerB: " << e.what() << '\n';
+        exit(EXIT_FAILURE);
+    }
 
     orchestrator_sub.close();
     sync_socket.close();
     recv_from_workerA.close();
     send_to_sink.close();
+    ctx.shutdown();
+    ctx.close();
     
     return 0;
 }
