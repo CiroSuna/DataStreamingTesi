@@ -45,6 +45,11 @@ int main(int argc, char* argv[]) {
 
     std::cout << "Sink: synchronized and ready\n";
 
+    int batch_size {5};
+    constexpr int expected_batches {5};
+    int received {0};
+    int batches_recives {0};
+
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },
         { orchestrator_sub,  0, ZMQ_POLLIN, 0 }
@@ -67,15 +72,20 @@ int main(int argc, char* argv[]) {
                 if (d.curr_value == d.original_value) res_message = "Dato consinstente!";
                 else res_message = "Dato non consistente";
 
-                std::cout << "Sink: received data " << d.curr_value << " " << res_message << '\n' << std::flush;
+                if (++received == batch_size) {
+                    batches_recives++;  
+                    received = 0;
+                }
+                
+                std::cout << "Sink: received data " << d.curr_value << " " << res_message << "internal batche message recived: " << received << ", (" << batches_recives << "/" << expected_batches << ")\n" << std::flush;
 
-                // Notify orchestrator and wait for ack
-                /*
-                sync_socket.send(zmq::message_t("END", 3), zmq::send_flags::none);
-                zmq::message_t ack;
-                sync_socket.recv(ack);
-                break;
-                */
+                if (batches_recives >= expected_batches) {
+                    // Notify orchestrator and wait for ack
+                    sync_socket.send(zmq::message_t("END", 3), zmq::send_flags::none);
+                    zmq::message_t ack;
+                    sync_socket.recv(ack);
+                    break;
+                }
             }
 
             if (items[1].revents & ZMQ_POLLIN) {

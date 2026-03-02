@@ -40,8 +40,9 @@ struct data{
     int curr_value{};
     int original_value{};
     data(int _x) : curr_value{_x}, original_value{_x} {}
+    data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x} {}
     data() : curr_value{}, original_value{} {}
-    data(data& d) : curr_value{d.curr_value}, original_value {d.original_value} {}
+    data(const data& d) : curr_value {d.curr_value}, original_value {d.original_value} {}
 };
 
 struct update_ms {

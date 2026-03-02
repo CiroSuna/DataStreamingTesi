@@ -8,12 +8,17 @@
 
 #define PIPE_LENGTH 4
 
+// Flag to tell when to shutdown pipe
+std::atomic<bool> shutdown {false};
+
 // Exiting on error function
 [[noreturn]] void fatal(const std::string& msg) {
     std::cerr << msg << '\n';
     kill(0, SIGTERM);
+
     for (size_t i {0}; i < PIPE_LENGTH; i++)
         waitpid(-1, nullptr, 0);
+
     exit(EXIT_FAILURE);
 }
 
@@ -35,7 +40,6 @@ pid_t process_starter(const std::string& process_name, const std::string& in_soc
 void on_sigchld(int) {
     pid_t pid;
     int status;
-    // waitpid non-bloccante per raccogliere tutti i figli terminati
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         std::cerr << "Child " << pid << " died unexpectedly, shutting down\n";
         kill(0, SIGTERM);
@@ -74,8 +78,6 @@ int main(int argc, char const *argv[]){
     try {
         orchestrator.bind(ipc_paths::orchestrator());
         sync_socket.bind(ipc_paths::sync_socket_path());
-        
-        // Set receive timeout to avoid deadlock (5 seconds)
         sync_socket.set(zmq::sockopt::rcvtimeo, 5000);
     }
     catch (const zmq::error_t& e) {
@@ -100,7 +102,7 @@ int main(int argc, char const *argv[]){
 
             std::string r {static_cast<char*>(msg.data()), msg.size()};
             std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
-            
+
             if (r == "READY") {
                 ++ready_count;
                 std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
@@ -138,6 +140,7 @@ int main(int argc, char const *argv[]){
     orchestrator.send(zmq::message_t("SHUTDOWN", 8), zmq::send_flags::none);
 
     // Wait for all children to finish before closing sockets
+    // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored
     for (size_t i {0}; i < PIPE_LENGTH; i++)
         waitpid(p_child[i], nullptr, 0);
 

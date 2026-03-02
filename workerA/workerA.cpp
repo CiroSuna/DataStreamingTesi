@@ -1,9 +1,24 @@
 #include <iostream>
 #include <cstdio>
+#include <thread>
+#include <chrono>
+#include <queue>
+#include <mutex>
 #include <zmq.hpp>
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
 #include "utils.hpp"
+
+int fib(int n) {
+    if (n <= 1) return n;
+    int a{0}, b{1};
+    for (int i{2}; i <= n; i++) {
+        int tmp = a + b;
+        a = b;
+        b = tmp;
+    }
+    return b;
+}
 
 int main(int argc, char* argv[]) {
     if (argc < 4) {
@@ -53,6 +68,10 @@ int main(int argc, char* argv[]) {
     std::cout << "WorkerA: synchronized and ready\n";
 
 
+    ThreadPool pool {10};
+    std::mutex result_queue_lock;
+    std::queue<data> result_queue;
+
     zmq::pollitem_t items[] = {
         { recv_from_sender, 0, ZMQ_POLLIN, 0 },
         { orchestrator_sub , 0, ZMQ_POLLIN, 0 }
@@ -72,9 +91,19 @@ int main(int argc, char* argv[]) {
                 data d {};
                 memcpy(&d, msg.data(), sizeof(data));
                 std::cout << "WorkerA: dato ricevuto da sender: " << d.curr_value << '\n';
-                d.curr_value++;
 
-                send_to_workerB.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+                pool.add_task([d, &result_queue, &result_queue_lock](){
+                    auto tid = std::this_thread::get_id();
+                    std::cout << "[WorkerA] Thread " << tid << " processing value: " << d.curr_value << '\n' << std::flush;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    data processed {d};
+                    processed.curr_value += fib(processed.original_value % 30);
+                    std::cout << "[WorkerA] Thread " << tid << " done -> " << processed.curr_value << '\n' << std::flush;
+                    std::unique_lock<std::mutex> lock(result_queue_lock);
+                    result_queue.push(processed);
+                });
+
+                //send_to_workerB.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
             }
             
             if (items[1].revents & ZMQ_POLLIN) {
@@ -93,6 +122,15 @@ int main(int argc, char* argv[]) {
                 if (r == "SHUTDOWN") {
                     std::cout << "Shutdown recived, proceding to close \n" << std::flush;
                     break;
+                }
+            }
+
+            {
+                std::unique_lock<std::mutex> lock(result_queue_lock);
+                while (!result_queue.empty()) {
+                    auto res {result_queue.front()};
+                    result_queue.pop();
+                    send_to_workerB.send(zmq::message_t(&res, sizeof(data)), zmq::send_flags::none);
                 }
             }
         }

@@ -1,5 +1,7 @@
 #include <iostream>
 #include <cstdio>
+#include <thread>
+#include <chrono>
 #include <zmq.hpp>
 #include <unistd.h>
 #include "dataTypes.hpp"
@@ -72,11 +74,14 @@ int main(int argc, char* argv[]) {
             }
 
             if (items[1].revents & ZMQ_POLLOUT) {
-                data d{curr_value++};
-                send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
-                std::cout << "Sender: dato mandato verso A: " << d.curr_value << '\n' << std::flush;
-                //has_data = false; // togli questa riga per inviare continuamente
+
+                for (size_t i {0}; i < 5; i++) {
+                    data d{curr_value++};
+                    send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+                    std::cout << "Sender: dato mandato verso A: " << d.curr_value << '\n' << std::flush;
+                }
             }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         }
     }
     catch (zmq::error_t& e) {
