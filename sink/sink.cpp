@@ -52,7 +52,7 @@ int main(int argc, char* argv[]) {
 
     try {
         while (true) {
-            zmq::poll(items, 2, -1);
+            zmq::poll(items, 2);
  
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t msg;
@@ -70,10 +70,12 @@ int main(int argc, char* argv[]) {
                 std::cout << "Sink: received data " << d.curr_value << " " << res_message << '\n' << std::flush;
 
                 // Notify orchestrator and wait for ack
+                /*
                 sync_socket.send(zmq::message_t("END", 3), zmq::send_flags::none);
                 zmq::message_t ack;
                 sync_socket.recv(ack);
                 break;
+                */
             }
 
             if (items[1].revents & ZMQ_POLLIN) {
@@ -83,7 +85,8 @@ int main(int argc, char* argv[]) {
                 auto status = orchestrator_sub.recv(topic, zmq::recv_flags::dontwait);
                 if (!status.has_value()) continue;
 
-                orchestrator_sub.recv(msg);
+                status = orchestrator_sub.recv(msg);
+                if (!status.has_value()) continue;
 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == "SHUTDOWN") {

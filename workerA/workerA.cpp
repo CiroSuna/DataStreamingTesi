@@ -86,7 +86,8 @@ int main(int argc, char* argv[]) {
                 auto status = orchestrator_sub.recv(topic, zmq::recv_flags::dontwait);
                 if (!status.has_value()) continue;
                 
-                orchestrator_sub.recv(msg);
+                status = orchestrator_sub.recv(msg);
+                if (!status.has_value()) continue; 
                 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == "SHUTDOWN") {

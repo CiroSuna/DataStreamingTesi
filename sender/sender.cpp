@@ -36,17 +36,24 @@ int main(int argc, char* argv[]) {
     }
 
     // TEST send
+    /*
     data d{10};
     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
     std::cout << "Sender: dato mandato verso A\n" << std::flush;
+    */
 
     zmq::pollitem_t items[] = {
-        { orchestrator_sub, 0, ZMQ_POLLIN, 0 }
+        { orchestrator_sub, 0, ZMQ_POLLIN,  0 },
+        { send_to_A,        0, ZMQ_POLLOUT, 0 }
     };
+
+    int curr_value {10};
+    bool has_data {true};
 
     try {
         while (true) {
-            zmq::poll(items, 1, std::chrono::milliseconds(100));
+            items[1].events = has_data ? ZMQ_POLLOUT : 0;
+            zmq::poll(items, 2, std::chrono::milliseconds(100));
 
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t topic;
@@ -62,6 +69,13 @@ int main(int argc, char* argv[]) {
                 if (r == "SHUTDOWN") {
                     break;
                 }
+            }
+
+            if (items[1].revents & ZMQ_POLLOUT) {
+                data d{curr_value++};
+                send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+                std::cout << "Sender: dato mandato verso A: " << d.curr_value << '\n' << std::flush;
+                //has_data = false; // togli questa riga per inviare continuamente
             }
         }
     }

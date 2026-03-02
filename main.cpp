@@ -8,11 +8,19 @@
 
 #define PIPE_LENGTH 4
 
+// Exiting on error function
+[[noreturn]] void fatal(const std::string& msg) {
+    std::cerr << msg << '\n';
+    kill(0, SIGTERM);
+    for (size_t i {0}; i < PIPE_LENGTH; i++)
+        waitpid(-1, nullptr, 0);
+    exit(EXIT_FAILURE);
+}
+
 pid_t process_starter(const std::string& process_name, const std::string& in_socket, const std::string& out_socket, const std::string& orchestrator_ipc){
     pid_t new_proc {fork()};
     if (new_proc == -1) {
-        perror(("Errore fork " + process_name).c_str());
-        exit(EXIT_FAILURE);
+        fatal("Errore fork " + process_name + ": " + strerror(errno));
     }
     else if (new_proc == 0) {
         std::string path {"./" + process_name + "/" + process_name};
@@ -24,6 +32,16 @@ pid_t process_starter(const std::string& process_name, const std::string& in_soc
     return new_proc;
 }
 
+void on_sigchld(int) {
+    pid_t pid;
+    int status;
+    // waitpid non-bloccante per raccogliere tutti i figli terminati
+    while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
+        std::cerr << "Child " << pid << " died unexpectedly, shutting down\n";
+        kill(0, SIGTERM);
+    }
+}
+
 void on_sigint(int) {
     kill(0, SIGTERM);
     for (size_t i {0}; i < PIPE_LENGTH; i++)
@@ -32,6 +50,7 @@ void on_sigint(int) {
 
 int main(int argc, char const *argv[]){
     signal(SIGINT, on_sigint);
+    signal(SIGCHLD, on_sigchld);
 
     // Cleanup for old ipc files in tmp
     cleanup_ipc_path(ipc_paths::orchestrator());
@@ -60,8 +79,7 @@ int main(int argc, char const *argv[]){
         sync_socket.set(zmq::sockopt::rcvtimeo, 5000);
     }
     catch (const zmq::error_t& e) {
-        std::cerr << "orchestrator: " << e.what() << '\n';
-        exit(EXIT_FAILURE);
+        fatal(std::string("orchestrator: ") + e.what());
     }
 
     
@@ -79,8 +97,10 @@ int main(int argc, char const *argv[]){
                 std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << ", retrying...\n";
                 continue;
             }
+
             std::string r {static_cast<char*>(msg.data()), msg.size()};
             std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
+            
             if (r == "READY") {
                 ++ready_count;
                 std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
@@ -88,8 +108,7 @@ int main(int argc, char const *argv[]){
             }
         }
         catch (const zmq::error_t& e) {
-            std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << "\n";
-            exit(EXIT_FAILURE);
+            fatal("Timeout waiting for READY messages. Got " + std::to_string(ready_count) + "/" + std::to_string(expected));
         }
     }
     // End sync logic
@@ -99,19 +118,17 @@ int main(int argc, char const *argv[]){
 
     // Remove timeout for the final blocking recv from sink
     // sync_socket.set(zmq::sockopt::rcvtimeo, -1);
-
+    sync_socket.set(zmq::sockopt::rcvtimeo, -1);
     zmq::message_t msg_final;
     auto res_final = sync_socket.recv(msg_final, zmq::recv_flags::none);
     if (!res_final.has_value()) {
-        std::cerr << "Error: timeout waiting for final message from sink\n";
-        exit(EXIT_FAILURE);
+        fatal("Error: timeout waiting for final message from sink");
     }
 
     std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
 
     if (final_str != "END") {
-        std::cerr << "Error: wrong message recived, expected: END\n";    
-        exit(EXIT_FAILURE);
+        fatal("Error: wrong message received, expected: END, got: " + final_str);
     }
 
     std::cout << "sink: " << final_str << " dato arrivato al sink\n";
