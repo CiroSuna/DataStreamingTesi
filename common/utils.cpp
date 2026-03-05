@@ -31,7 +31,7 @@ bool cleanup_ipc_path(const std::string& ipc_path_file) {
 bool sync_with_orchestrator(zmq::socket_t& sync_socket, const std::string& id) {
     // REQ/REP barrier: send READY, wait for GO.
     std::cout << id << ": Sending READY to orchestrator...\n" << std::flush;
-    auto send_result = sync_socket.send(zmq::message_t("READY", 5), zmq::send_flags::none);
+    auto send_result = sync_socket.send(zmq::message_t(messages::READY, 5), zmq::send_flags::none);
     if (!send_result.has_value()) {
         std::cerr << id << ": Error sending READY\n";
         return false;
@@ -45,7 +45,7 @@ bool sync_with_orchestrator(zmq::socket_t& sync_socket, const std::string& id) {
         return false;
     }
     std::string r {static_cast<char*>(res.data()), res.size()};
-    if (r != "GO") {
+    if (r != messages::GO) {
         std::cerr << id << ": Error, unexpected response from orchestrator: " << r << '\n';
         return false;
     }

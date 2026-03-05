@@ -1,6 +1,7 @@
 #include <iostream>
 #include <thread>
 #include <mutex>
+#include <algorithm>
 #include "threadPool.hpp"
 
 ThreadPool::ThreadPool(int initial_threads) 
@@ -40,7 +41,28 @@ void ThreadPool::destroy_n_threads(int n) {
     std::unique_lock<std::mutex> lock(pool_mtx);
     destroy_count += n; 
 }
-       
+      
+// Cleanup finished threads (MUST be called while holding pool_mtx lock)
+void ThreadPool::cleanup_finished_threads() {
+    for (auto& id : finished_thread_ids) {
+        auto it = std::find_if(thrd_list.begin(), thrd_list.end(),
+            [&id](std::thread& t){ return t.get_id() == id; });
+        if (it != thrd_list.end()) {
+            it->join();
+            thrd_list.erase(it);
+        }
+    }
+    finished_thread_ids.clear();
+}
+
+void ThreadPool::add_n_threads(int n) {
+    std::unique_lock<std::mutex> lock(pool_mtx);
+    if (stop) return;
+    cleanup_finished_threads();
+    for (size_t i {0}; i < n; i++) {
+        thrd_list.emplace_back(&ThreadPool::thrd_task_loop, this); 
+    } 
+}
 // Loop for task fetching
 void ThreadPool::thrd_task_loop() {
     while (true) {
@@ -53,8 +75,10 @@ void ThreadPool::thrd_task_loop() {
             });
 
             if (stop || destroy_count > 0) {
-                if (destroy_count > 0)
+                if (destroy_count > 0) {
                     destroy_count--;
+                    finished_thread_ids.push_back(std::this_thread::get_id());
+                }
                 return;
             }
             

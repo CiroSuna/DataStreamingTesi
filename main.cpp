@@ -6,7 +6,7 @@
 #include "dataTypes.hpp"
 #include "utils.hpp"
 
-#define PIPE_LENGTH 4
+constexpr int PIPE_LENGTH {4};
 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> shutdown {false};
@@ -52,7 +52,32 @@ void on_sigint(int) {
         waitpid(-1, nullptr, 0);
 }
 
-int main(int argc, char const *argv[]){
+// Wait for `expected` READY messages from child processes, reply GO to each
+void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
+    int ready_count {0};
+    while (ready_count < expected) {
+        zmq::message_t msg;
+        try {
+            auto res = sync_socket.recv(msg, zmq::recv_flags::none);
+            if (!res.has_value()) {
+                std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << ", retrying...\n";
+                continue;
+            }
+            std::string r {static_cast<char*>(msg.data()), msg.size()};
+            std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
+            if (r == messages::READY) {
+                ++ready_count;
+                std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
+                sync_socket.send(zmq::message_t(messages::GO, 2), zmq::send_flags::none);
+            }
+        }
+        catch (const zmq::error_t& e) {
+            fatal("Timeout waiting for READY messages. Got " + std::to_string(ready_count) + "/" + std::to_string(expected));
+        }
+    }
+}
+
+int main(void){
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
 
@@ -84,42 +109,11 @@ int main(int argc, char const *argv[]){
         fatal(std::string("orchestrator: ") + e.what());
     }
 
-    
+    // Sync 
     std::cout << "Main: Starting to wait for READY messages...\n" << std::flush;
-
-    // TODO: evaluate to put sync logic inside a funciotn for more code readability
-    // SYNC logic
-    constexpr int expected {4};
-    int ready_count {0};
-    while (ready_count < expected) {
-        zmq::message_t msg;
-        try {
-            auto res = sync_socket.recv(msg, zmq::recv_flags::none);
-            if (!res.has_value()) {
-                std::cerr << "Timeout waiting for READY messages. Got " << ready_count << "/" << expected << ", retrying...\n";
-                continue;
-            }
-
-            std::string r {static_cast<char*>(msg.data()), msg.size()};
-            std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
-
-            if (r == "READY") {
-                ++ready_count;
-                std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
-                sync_socket.send(zmq::message_t("GO", 2), zmq::send_flags::none);
-            }
-        }
-        catch (const zmq::error_t& e) {
-            fatal("Timeout waiting for READY messages. Got " + std::to_string(ready_count) + "/" + std::to_string(expected));
-        }
-    }
-    // End sync logic
-
-    
+    wait_for_ready(sync_socket, PIPE_LENGTH);
     std::cout << "All process sync and in exection\n";
 
-    // Remove timeout for the final blocking recv from sink
-    // sync_socket.set(zmq::sockopt::rcvtimeo, -1);
     sync_socket.set(zmq::sockopt::rcvtimeo, -1);
     zmq::message_t msg_final;
     auto res_final = sync_socket.recv(msg_final, zmq::recv_flags::none);
@@ -129,15 +123,15 @@ int main(int argc, char const *argv[]){
 
     std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
 
-    if (final_str != "END") {
+    if (final_str != messages::END) {
         fatal("Error: wrong message received, expected: END, got: " + final_str);
     }
 
     std::cout << "sink: " << final_str << " dato arrivato al sink\n";
-    sync_socket.send(zmq::message_t("OK", 2), zmq::send_flags::none);
+    sync_socket.send(zmq::message_t(messages::OK, 2), zmq::send_flags::none);
     
     orchestrator.send(zmq::message_t(topics::global_topic()), zmq::send_flags::sndmore);
-    orchestrator.send(zmq::message_t("SHUTDOWN", 8), zmq::send_flags::none);
+    orchestrator.send(zmq::message_t(messages::SHUTDOWN, 8), zmq::send_flags::none);
 
     // Wait for all children to finish before closing sockets
     // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored

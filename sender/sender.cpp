@@ -68,7 +68,7 @@ int main(int argc, char* argv[]) {
                 if (!status.has_value()) continue;
 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
-                if (r == "SHUTDOWN") {
+                if (r == messages::SHUTDOWN) {
                     break;
                 }
             }

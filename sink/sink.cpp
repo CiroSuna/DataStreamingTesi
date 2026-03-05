@@ -81,7 +81,7 @@ int main(int argc, char* argv[]) {
 
                 if (batches_recives >= expected_batches) {
                     // Notify orchestrator and wait for ack
-                    sync_socket.send(zmq::message_t("END", 3), zmq::send_flags::none);
+                    sync_socket.send(zmq::message_t(messages::END, 3), zmq::send_flags::none);
                     zmq::message_t ack;
                     sync_socket.recv(ack);
                     break;
@@ -99,7 +99,7 @@ int main(int argc, char* argv[]) {
                 if (!status.has_value()) continue;
 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
-                if (r == "SHUTDOWN") {
+                if (r == messages::SHUTDOWN) {
                     break;
                 }
             }

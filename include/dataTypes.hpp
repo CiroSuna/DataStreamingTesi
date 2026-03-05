@@ -31,6 +31,15 @@ namespace topics {
     inline std::string global_topic() { return GLOBAL; }
 }
 
+// Sync/control messages
+namespace messages {
+    constexpr const char* READY    = "READY";
+    constexpr const char* GO       = "GO";
+    constexpr const char* SHUTDOWN = "SHUTDOWN";
+    constexpr const char* END      = "END";
+    constexpr const char* OK       = "OK";
+}
+
 enum update_type{
     THREAD_INC,
     THREAD_DEC
