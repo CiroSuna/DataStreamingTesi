@@ -8,6 +8,7 @@
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
 #include "utils.hpp"
+#include "logger.hpp"
 
 int fib(int n) {
     if (n <= 1) return n;
@@ -20,37 +21,29 @@ int fib(int n) {
     return b;
 }
 
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        std::cerr << "Usage: workerB <ipc_filepath>\n";
-        return 1;
-    }
-    
-    
-    std::string ipc_filepath {argv[1]};
-    std::string to_sink_path {argv[2]};
-    std::string orchestrator_ipc {argv[3]}; 
-
-    std::cout << "WorkerB: Starting...\n";
+int main() {
+    Logger::instance().init(std::string(LOG_DIR) + "/workerB.log");
+    LOG_INFO("workerB", "Starting...");
     
     zmq::context_t ctx {};
     zmq::socket_t orchestrator_sub {ctx, zmq::socket_type::sub};
     zmq::socket_t sync_socket {ctx, zmq::socket_type::req};
     zmq::socket_t recv_from_workerA {ctx, zmq::socket_type::pull};
     zmq::socket_t send_to_sink {ctx, zmq::socket_type::push};
+    zmq::socket_t orchestrator_dealer {ctx, zmq::socket_type::dealer};
 
-    std::cout << "WorkerB: Sockets created\n";
+    LOG_DEBUG("workerB", "Sockets created");
 
     try {
-        orchestrator_sub.connect(orchestrator_ipc);
+        orchestrator_sub.connect(ipc_paths::orchestrator());
         sync_socket.connect(ipc_paths::sync_socket_path());
-        recv_from_workerA.bind(ipc_filepath);
-        send_to_sink.connect(to_sink_path);
+        recv_from_workerA.bind(ipc_paths::workerA_to_workerB());
+        send_to_sink.connect(ipc_paths::workerB_to_sink());
+        orchestrator_dealer.set(zmq::sockopt::routing_id, topics::WORKERB);
+        orchestrator_dealer.connect(ipc_paths::router_path());
 
         orchestrator_sub.set(zmq::sockopt::subscribe, topics::GLOBAL);
-        recv_from_workerA.set(zmq::sockopt::rcvtimeo, 100);
-        orchestrator_sub.set(zmq::sockopt::rcvtimeo, 100);
-        std::cout << "WorkerB: All connections established\n";
+        LOG_INFO("workerB", "All connections established");
     }
     catch (const zmq::error_t& e) {
         std::cerr << "workerB: " << e.what() << '\n';
@@ -62,7 +55,7 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    std::cout << "WorkerB: synchronized and ready\n";
+    LOG_INFO("workerB", "Synchronized and ready");
 
     ThreadPool pool {10};
     std::mutex result_queue_lock;
@@ -85,16 +78,18 @@ int main(int argc, char* argv[]) {
 
                 data d {};
                 memcpy(&d, msg.data(), sizeof(data));
-                std::cout << "WorkerB: dato ricevuto da workerA: " << d.curr_value << '\n';
+                LOG_DEBUG("workerB", "dato ricevuto da workerA: " + std::to_string(d.curr_value));
 
                 pool.add_task([d, &result_queue, &result_queue_lock]() {
-                    auto tid = std::this_thread::get_id();
-                    std::cout << "[WorkerB] Thread " << tid << " processing value: " << d.curr_value << '\n' << std::flush;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    std::ostringstream tid_ss;
+                    tid_ss << std::this_thread::get_id();
+                    LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
 
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     data processed {d};
                     processed.curr_value -= fib(processed.original_value % 30);
-                    std::cout << "[WorkerB] Thread " << tid << " done -> " << processed.curr_value << '\n' << std::flush;
+                    LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " done -> " + std::to_string(processed.curr_value));
+
                     std::unique_lock<std::mutex> lock(result_queue_lock);
                     result_queue.push(processed);
                 });
@@ -112,7 +107,7 @@ int main(int argc, char* argv[]) {
                 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == messages::SHUTDOWN) {
-                    std::cout << "Shutdown recived, proceding to close \n";
+                    LOG_INFO("workerB", "Shutdown received, proceeding to close");
                     break;
                 }
             }
@@ -136,6 +131,7 @@ int main(int argc, char* argv[]) {
     sync_socket.close();
     recv_from_workerA.close();
     send_to_sink.close();
+    orchestrator_dealer.close();
     ctx.shutdown();
     ctx.close();
     

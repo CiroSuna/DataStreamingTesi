@@ -10,12 +10,14 @@ namespace ipc_paths {
     constexpr const char* WORKERA_TO_WORKERB = "/tmp/workb.ipc";
     constexpr const char* WORKERB_TO_SINK = "/tmp/sink.ipc";
     constexpr const char* SYNC_SOCK = "/tmp/sync.ipc";
+    constexpr const char* ROUTER_SOCK = "/tmp/router.ipc"; 
     
     inline std::string orchestrator() { return "ipc:///tmp/orchestrator.ipc"; }
     inline std::string sender_to_workerA() { return "ipc:///tmp/workA.ipc"; }
     inline std::string workerA_to_workerB() { return "ipc:///tmp/workb.ipc"; }
     inline std::string workerB_to_sink() { return "ipc:///tmp/sink.ipc"; }
     inline std::string sync_socket_path() { return "ipc:///tmp/sync.ipc"; }
+    inline std::string router_path() { return "ipc:///tmp/router.ipc"; }
 }
 
 // Topic prefixes for pub-sub
@@ -23,6 +25,8 @@ namespace topics {
     constexpr const char* WORKERA = "[WorkA]";
     constexpr const char* WORKERB = "[WorkB]";
     constexpr const char* SYNC = "[Sync]";
+    constexpr const char* SENDER = "[Sender]";
+    constexpr const char* SINK   = "[Sink]";
     constexpr const char* GLOBAL = "[Global]";
 
     inline std::string workera_topic() { return WORKERA; }
@@ -33,11 +37,11 @@ namespace topics {
 
 // Sync/control messages
 namespace messages {
-    constexpr const char* READY    = "READY";
-    constexpr const char* GO       = "GO";
+    constexpr const char* READY = "READY";
+    constexpr const char* GO = "GO";
     constexpr const char* SHUTDOWN = "SHUTDOWN";
-    constexpr const char* END      = "END";
-    constexpr const char* OK       = "OK";
+    constexpr const char* END = "END";
+    constexpr const char* OK = "OK";
 }
 
 enum update_type{

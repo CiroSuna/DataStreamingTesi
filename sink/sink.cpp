@@ -2,36 +2,30 @@
 #include <zmq.hpp>
 #include "dataTypes.hpp"
 #include "utils.hpp"
+#include "logger.hpp"
 
 
-int main(int argc, char* argv[]) {
-    if (argc < 4) {
-        std::cerr << "Usage: sink <ipc_filepath> <unused> <orchestrator_ipc>\n";
-        return 1;
-    }
-
-    std::string ipc_filepath {argv[1]};
-
-    std::string orchestrator_ipc {argv[3]};
-
-    std::cout << "Sink: Starting...\n";
+int main() {
+    Logger::instance().init(std::string(LOG_DIR) + "/sink.log");
+    LOG_INFO("sink", "Starting...");
     
     zmq::context_t ctx {};
     zmq::socket_t orchestrator_sub {ctx, zmq::socket_type::sub};
     zmq::socket_t sync_socket {ctx, zmq::socket_type::req};
     zmq::socket_t recv_from_workerB {ctx, zmq::socket_type::pull};
+    zmq::socket_t orchestrator_dealer {ctx, zmq::socket_type::dealer};
 
-    std::cout << "Sink: Sockets created\n";
+    LOG_DEBUG("sink", "Sockets created");
 
     try {
-        orchestrator_sub.connect(orchestrator_ipc);
+        orchestrator_sub.connect(ipc_paths::orchestrator());
         sync_socket.connect(ipc_paths::sync_socket_path());
-        recv_from_workerB.bind(ipc_filepath);
+        recv_from_workerB.bind(ipc_paths::workerB_to_sink());
+        orchestrator_dealer.set(zmq::sockopt::routing_id, topics::SINK);
+        orchestrator_dealer.connect(ipc_paths::router_path());
 
         orchestrator_sub.set(zmq::sockopt::subscribe, topics::GLOBAL);
-        recv_from_workerB.set(zmq::sockopt::rcvtimeo, 100);
-        orchestrator_sub.set(zmq::sockopt::rcvtimeo, 100);
-        std::cout << "Sink: All connections established\n";
+        LOG_INFO("sink", "All connections established");
     }
     catch (const zmq::error_t& e) {
         std::cerr << "sink: " << e.what() << '\n';
@@ -43,12 +37,12 @@ int main(int argc, char* argv[]) {
         exit(EXIT_FAILURE);
     }
 
-    std::cout << "Sink: synchronized and ready\n";
+    LOG_INFO("sink", "Synchronized and ready");
 
     int batch_size {5};
     constexpr int expected_batches {5};
     int received {0};
-    int batches_recives {0};
+    int batches_recived {0};
 
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },
@@ -72,18 +66,19 @@ int main(int argc, char* argv[]) {
                 if (d.curr_value == d.original_value) res_message = "Dato consinstente!";
                 else res_message = "Dato non consistente";
 
-                if (++received == batch_size) {
-                    batches_recives++;  
-                    received = 0;
-                }
-                
-                std::cout << "Sink: received data " << d.curr_value << " " << res_message << "internal batche message recived: " << received << ", (" << batches_recives << "/" << expected_batches << ")\n" << std::flush;
+                LOG_DEBUG("sink", "received data " + std::to_string(d.curr_value) + " " + res_message);
 
-                if (batches_recives >= expected_batches) {
+                if (++received == batch_size) {
+                    batches_recived++;
+                    received = 0;
+                    LOG_INFO("sink", "Batch completed (" + std::to_string(batches_recived) + "/" + std::to_string(expected_batches) + ")");
+                }
+
+                if (batches_recived >= expected_batches) {
                     // Notify orchestrator and wait for ack
                     sync_socket.send(zmq::message_t(messages::END, 3), zmq::send_flags::none);
                     zmq::message_t ack;
-                    sync_socket.recv(ack);
+                    (void)sync_socket.recv(ack, zmq::recv_flags::none);
                     break;
                 }
             }
@@ -113,6 +108,7 @@ int main(int argc, char* argv[]) {
     orchestrator_sub.close();
     sync_socket.close();
     recv_from_workerB.close();
+    orchestrator_dealer.close();
     ctx.shutdown();
     ctx.close();
     return 0;

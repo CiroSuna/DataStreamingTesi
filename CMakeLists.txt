@@ -4,6 +4,14 @@ project(DataStreaming CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+option(DEBUG_BUILD "Enable debug logging" OFF)
+if(DEBUG_BUILD)
+    add_compile_definitions(DEBUG_BUILD)
+    message(STATUS "Debug logging: ON")
+endif()
+
+add_compile_definitions(LOG_DIR="${CMAKE_SOURCE_DIR}/logs")
+
 
 # Richiesta delle librerie necessarie
 find_package(cppzmq REQUIRED)
@@ -18,6 +26,7 @@ add_executable(start
     main.cpp
     common/threadPool.cpp
     common/utils.cpp
+    common/logger.cpp
 )
 target_include_directories(start PRIVATE include)
 target_link_libraries(start PRIVATE cppzmq)

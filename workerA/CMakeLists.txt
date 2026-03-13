@@ -2,6 +2,7 @@ add_executable(workerA
     workerA.cpp
     ${CMAKE_SOURCE_DIR}/common/threadPool.cpp
     ${CMAKE_SOURCE_DIR}/common/utils.cpp
+    ${CMAKE_SOURCE_DIR}/common/logger.cpp
 )
 
 target_include_directories(workerA PRIVATE ${CMAKE_SOURCE_DIR}/include)

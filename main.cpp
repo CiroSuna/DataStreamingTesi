@@ -5,6 +5,7 @@
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
 #include "utils.hpp"
+#include "logger.hpp"
 
 constexpr int PIPE_LENGTH {4};
 
@@ -22,14 +23,14 @@ std::atomic<bool> shutdown {false};
     exit(EXIT_FAILURE);
 }
 
-pid_t process_starter(const std::string& process_name, const std::string& in_socket, const std::string& out_socket, const std::string& orchestrator_ipc){
+pid_t process_starter(const std::string& process_name){
     pid_t new_proc {fork()};
     if (new_proc == -1) {
         fatal("Errore fork " + process_name + ": " + strerror(errno));
     }
     else if (new_proc == 0) {
         std::string path {"./" + process_name + "/" + process_name};
-        execl(path.c_str(), process_name.c_str(), in_socket.c_str(), out_socket.c_str(), orchestrator_ipc.c_str(), nullptr);
+        execl(path.c_str(), process_name.c_str(), nullptr);
         perror(("Errore execl " + process_name).c_str());
         exit(EXIT_FAILURE);
     }
@@ -41,9 +42,10 @@ void on_sigchld(int) {
     pid_t pid;
     int status;
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        std::cerr << "Child " << pid << " died unexpectedly, shutting down\n";
+        std::cerr << "Child " << pid << " ended execution shutting down\n";
         kill(0, SIGTERM);
     }
+    
 }
 
 void on_sigint(int) {
@@ -52,7 +54,7 @@ void on_sigint(int) {
         waitpid(-1, nullptr, 0);
 }
 
-// Wait for `expected` READY messages from child processes, reply GO to each
+// Wait for "expected" READY messages from child processes, reply GO to each
 void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
     int ready_count {0};
     while (ready_count < expected) {
@@ -64,10 +66,10 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
                 continue;
             }
             std::string r {static_cast<char*>(msg.data()), msg.size()};
-            std::cout << "[DEBUG] Received: " << r << " (" << ready_count + 1 << "/" << expected << ")\n" << std::flush;
+            LOG_DEBUG("main", "Received: " + r + " (" + std::to_string(ready_count + 1) + "/" + std::to_string(expected) + ")");
             if (r == messages::READY) {
                 ++ready_count;
-                std::cout << "Worker ready (" << ready_count << "/" << expected << ")\n" << std::flush;
+                LOG_INFO("main", "Worker ready (" + std::to_string(ready_count) + "/" + std::to_string(expected) + ")");
                 sync_socket.send(zmq::message_t(messages::GO, 2), zmq::send_flags::none);
             }
         }
@@ -78,6 +80,7 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
 }
 
 int main(void){
+    Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
 
@@ -89,20 +92,22 @@ int main(void){
     cleanup_ipc_path(ipc_paths::workerB_to_sink());
 
     pid_t p_child[PIPE_LENGTH] {
-        process_starter("workerA", ipc_paths::sender_to_workerA(), ipc_paths::workerA_to_workerB(), ipc_paths::orchestrator()),
-        process_starter("workerB", ipc_paths::workerA_to_workerB(), ipc_paths::workerB_to_sink(), ipc_paths::orchestrator()),
-        process_starter("sink", ipc_paths::workerB_to_sink(), "", ipc_paths::orchestrator()),
-        process_starter("sender", "", ipc_paths::sender_to_workerA(), ipc_paths::orchestrator())
+        process_starter("workerA"),
+        process_starter("workerB"),
+        process_starter("sink"),
+        process_starter("sender")
     };
 
     // Starting context, sockets and binding FIRST
     zmq::context_t ctx {};
     zmq::socket_t orchestrator {ctx, zmq::socket_type::pub};
     zmq::socket_t sync_socket {ctx, zmq::socket_type::rep};
+    zmq::socket_t router {ctx, zmq::socket_type::router};
 
     try {
         orchestrator.bind(ipc_paths::orchestrator());
         sync_socket.bind(ipc_paths::sync_socket_path());
+        router.bind(ipc_paths::router_path());
         sync_socket.set(zmq::sockopt::rcvtimeo, 5000);
     }
     catch (const zmq::error_t& e) {
@@ -110,26 +115,52 @@ int main(void){
     }
 
     // Sync 
-    std::cout << "Main: Starting to wait for READY messages...\n" << std::flush;
+    LOG_INFO("main", "Starting to wait for READY messages...");
     wait_for_ready(sync_socket, PIPE_LENGTH);
-    std::cout << "All process sync and in exection\n";
+    LOG_INFO("main", "All processes synced and in execution");
 
-    sync_socket.set(zmq::sockopt::rcvtimeo, -1);
-    zmq::message_t msg_final;
-    auto res_final = sync_socket.recv(msg_final, zmq::recv_flags::none);
-    if (!res_final.has_value()) {
-        fatal("Error: timeout waiting for final message from sink");
+    zmq::pollitem_t items[2] {
+        {sync_socket, 0, ZMQ_POLLIN, 0},
+        {router, 0, ZMQ_POLLIN, 0}
+    };
+
+    try {
+
+        while (true) {
+            zmq::poll(items, 2, std::chrono::milliseconds(100));
+            
+            if (items[0].revents & ZMQ_POLLIN) {
+                zmq::message_t msg_final;
+                (void)sync_socket.recv(msg_final, zmq::recv_flags::none);
+
+                std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
+
+                if (final_str != messages::END) {
+                    fatal("Error: wrong message received, expected: END, got: " + final_str);
+                }
+
+                LOG_INFO("main", "sink: " + final_str + " dato arrivato al sink");
+                sync_socket.send(zmq::message_t(messages::OK, 2), zmq::send_flags::none);  
+                break;
+            }
+
+            if (items[1].revents & ZMQ_POLLIN) {
+                zmq::message_t identity;
+                zmq::message_t payload;
+                auto status {router.recv(identity, zmq::recv_flags::dontwait)};
+                if (!status.has_value())
+                    continue;
+                (void)router.recv(payload, zmq::recv_flags::dontwait);
+
+                // TODO: add behevoir for different updates
+            }
+        } 
+        
+    }
+    catch (const zmq::error_t& e) {
+        fatal(std::string("Error waiting for sink END message: ") + e.what());
     }
 
-    std::string final_str {static_cast<char*>(msg_final.data()), msg_final.size()};
-
-    if (final_str != messages::END) {
-        fatal("Error: wrong message received, expected: END, got: " + final_str);
-    }
-
-    std::cout << "sink: " << final_str << " dato arrivato al sink\n";
-    sync_socket.send(zmq::message_t(messages::OK, 2), zmq::send_flags::none);
-    
     orchestrator.send(zmq::message_t(topics::global_topic()), zmq::send_flags::sndmore);
     orchestrator.send(zmq::message_t(messages::SHUTDOWN, 8), zmq::send_flags::none);
 
@@ -138,7 +169,5 @@ int main(void){
     for (size_t i {0}; i < PIPE_LENGTH; i++)
         waitpid(p_child[i], nullptr, 0);
 
-    sync_socket.close();
-    orchestrator.close();
     return 0;
 }
