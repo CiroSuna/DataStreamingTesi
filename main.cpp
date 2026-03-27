@@ -6,11 +6,14 @@
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
+#include "metrics.hpp"
+#include "httplib.h"
+
 
 constexpr int PIPE_LENGTH {4};
 
 // Flag to tell when to shutdown pipe
-std::atomic<bool> shutdown {false};
+std::atomic<bool> end_pipe {false};
 
 // Exiting on error function
 [[noreturn]] void fatal(const std::string& msg) {
@@ -79,6 +82,9 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
     }
 }
 
+
+
+
 int main(void){
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
@@ -91,6 +97,15 @@ int main(void){
     cleanup_ipc_path(ipc_paths::workerA_to_workerB());
     cleanup_ipc_path(ipc_paths::workerB_to_sink());
 
+    httplib::Server metrics_exposer;
+    metrics_exposer.Get("/metrics", [](const httplib::Request&, httplib::Response& res){
+        res.set_content(Metrics::instance().get_metrics(), "text/plain");
+    });
+
+    std::thread metrics_thread([&metrics_exposer](){
+        metrics_exposer.listen("0.0.0.0", 8080);
+    });
+
     pid_t p_child[PIPE_LENGTH] {
         process_starter("workerA"),
         process_starter("workerB"),
@@ -98,6 +113,7 @@ int main(void){
         process_starter("sender")
     };
 
+   
     // Starting context, sockets and binding FIRST
     zmq::context_t ctx {};
     zmq::socket_t orchestrator {ctx, zmq::socket_type::pub};
@@ -125,7 +141,7 @@ int main(void){
     };
 
     try {
-
+        // Poll loop
         while (true) {
             zmq::poll(items, 2, std::chrono::milliseconds(100));
             
@@ -146,13 +162,38 @@ int main(void){
 
             if (items[1].revents & ZMQ_POLLIN) {
                 zmq::message_t identity;
+                zmq::message_t tag;
                 zmq::message_t payload;
                 auto status {router.recv(identity, zmq::recv_flags::dontwait)};
                 if (!status.has_value())
                     continue;
+                (void)router.recv(tag, zmq::recv_flags::dontwait);
                 (void)router.recv(payload, zmq::recv_flags::dontwait);
 
-                // TODO: add behevoir for different updates
+                ProcessId sender_id {parse_process_id(
+                    std::string{static_cast<char*>(identity.data()), identity.size()}
+                )};
+                std::string tag_str {static_cast<char*>(tag.data()), tag.size()};
+
+                switch (sender_id) {
+                    case ProcessId::WORKERA:
+                        break;
+                    case ProcessId::WORKERB:
+                        break;
+                    case ProcessId::SENDER:
+                        break;
+                    case ProcessId::SINK: {
+                        if (tag_str == msg_types::BATCH_DURATION) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            Metrics::instance().observe_batch_duration(std::stod(value));
+                            LOG_DEBUG("main", "batch duration: " + value + "s");
+                        }
+                        break;
+                    }
+                    case ProcessId::UNKNOWN:
+                        LOG_DEBUG("main", "Unknown identity on router socket");
+                        break;
+                }
             }
         } 
         
@@ -163,11 +204,15 @@ int main(void){
 
     orchestrator.send(zmq::message_t(topics::global_topic()), zmq::send_flags::sndmore);
     orchestrator.send(zmq::message_t(messages::SHUTDOWN, 8), zmq::send_flags::none);
-
+    
     // Wait for all children to finish before closing sockets
     // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored
     for (size_t i {0}; i < PIPE_LENGTH; i++)
         waitpid(p_child[i], nullptr, 0);
+
+    // Shutdown listener thread
+    metrics_exposer.stop();
+    metrics_thread.join();
 
     return 0;
 }

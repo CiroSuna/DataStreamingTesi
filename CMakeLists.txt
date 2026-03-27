@@ -27,6 +27,7 @@ add_executable(start
     common/threadPool.cpp
     common/utils.cpp
     common/logger.cpp
+    common/metrics.cpp
 )
 target_include_directories(start PRIVATE include)
 target_link_libraries(start PRIVATE cppzmq)

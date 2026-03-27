@@ -1,5 +1,7 @@
 #include <iostream>
 #include <zmq.hpp>
+#include <chrono>
+#include <cstring>
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
@@ -40,9 +42,10 @@ int main() {
     LOG_INFO("sink", "Synchronized and ready");
 
     int batch_size {5};
-    constexpr int expected_batches {5};
+    constexpr int expected_batches {50};
     int received {0};
     int batches_recived {0};
+    int64_t batch_start_time {0};
 
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },
@@ -68,10 +71,24 @@ int main() {
 
                 LOG_DEBUG("sink", "received data " + std::to_string(d.curr_value) + " " + res_message);
 
+                if (received == 0 && d.send_time != 0)
+                    batch_start_time = d.send_time;
+
                 if (++received == batch_size) {
                     batches_recived++;
                     received = 0;
                     LOG_INFO("sink", "Batch completed (" + std::to_string(batches_recived) + "/" + std::to_string(expected_batches) + ")");
+
+                    if (batch_start_time != 0) {
+                        double duration = (std::chrono::steady_clock::now().time_since_epoch().count() - batch_start_time) * 1e-9;
+                        std::string dur_str = std::to_string(duration);
+                        orchestrator_dealer.send(zmq::message_t{msg_types::BATCH_DURATION, std::strlen(msg_types::BATCH_DURATION)}, zmq::send_flags::sndmore);
+                        orchestrator_dealer.send(zmq::message_t{dur_str.data(), dur_str.size()}, zmq::send_flags::none);
+                        batch_start_time = 0;
+                    } else {
+                        orchestrator_dealer.send(zmq::message_t{msg_types::BATCH_FINISHED, std::strlen(msg_types::BATCH_FINISHED)}, zmq::send_flags::sndmore);
+                        orchestrator_dealer.send(zmq::message_t{}, zmq::send_flags::none);
+                    }
                 }
 
                 if (batches_recived >= expected_batches) {

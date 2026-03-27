@@ -72,7 +72,7 @@ int main() {
     try {
 
         while (true) {
-            zmq::poll(items, 2, std::chrono::milliseconds(200));
+            zmq::poll(items, 2, std::chrono::milliseconds(50));
             
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t msg;

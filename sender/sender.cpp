@@ -75,6 +75,8 @@ int main() {
 
                 for (size_t i {0}; i < 5; i++) {
                     data d{curr_value++};
+                    if (i == 0)
+                        d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
                 }

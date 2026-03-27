@@ -2,6 +2,7 @@
 #define DATA_TYPES_H
 
 #include <string>
+#include <cstdint>
 
 // IPC Socket paths
 namespace ipc_paths {
@@ -35,6 +36,12 @@ namespace topics {
     inline std::string global_topic() { return GLOBAL; }
 }
 
+// Tagged message types for router payloads — add new tags here as needed
+namespace msg_types {
+    constexpr const char* BATCH_DURATION = "[BATCH_DURATION]";
+    constexpr const char* BATCH_FINISHED = "[BATCH_FINISHED]";
+}
+
 // Sync/control messages
 namespace messages {
     constexpr const char* READY = "READY";
@@ -42,6 +49,23 @@ namespace messages {
     constexpr const char* SHUTDOWN = "SHUTDOWN";
     constexpr const char* END = "END";
     constexpr const char* OK = "OK";
+}
+
+// Identifies which process sent a message on the router socket (routing_id == topic string)
+enum class ProcessId {
+    WORKERA,
+    WORKERB,
+    SENDER,
+    SINK,
+    UNKNOWN
+};
+
+inline ProcessId parse_process_id(const std::string& id) {
+    if (id == topics::WORKERA) return ProcessId::WORKERA;
+    if (id == topics::WORKERB) return ProcessId::WORKERB;
+    if (id == topics::SENDER)  return ProcessId::SENDER;
+    if (id == topics::SINK)    return ProcessId::SINK;
+    return ProcessId::UNKNOWN;
 }
 
 enum update_type{
@@ -52,10 +76,11 @@ enum update_type{
 struct data{
     int curr_value{};
     int original_value{};
-    data(int _x) : curr_value{_x}, original_value{_x} {}
-    data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x} {}
-    data() : curr_value{}, original_value{} {}
-    data(const data& d) : curr_value {d.curr_value}, original_value {d.original_value} {}
+    int64_t send_time{};  // nanoseconds since epoch (set by sender on first item of each batch)
+    data(int _x) : curr_value{_x}, original_value{_x}, send_time{} {}
+    data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x}, send_time{} {}
+    data() : curr_value{}, original_value{}, send_time{} {}
+    data(const data& d) : curr_value{d.curr_value}, original_value{d.original_value}, send_time{d.send_time} {}
 };
 
 struct update_ms {
