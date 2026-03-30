@@ -17,8 +17,8 @@ struct BatchDurationHistogram {
 class Metrics {
 public:
     static Metrics& instance();
-    void inc_worker_A_threads();
-    void inc_worker_B_threads();
+    void inc_worker_A_threads(int inc_value);
+    void inc_worker_B_threads(int inc_value);
     void observe_batch_duration(double seconds);
     std::string get_metrics();
 private:

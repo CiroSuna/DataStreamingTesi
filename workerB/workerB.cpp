@@ -40,8 +40,9 @@ int main() {
         recv_from_workerA.bind(ipc_paths::workerA_to_workerB());
         send_to_sink.connect(ipc_paths::workerB_to_sink());
         orchestrator_dealer.set(zmq::sockopt::routing_id, topics::WORKERB);
-        orchestrator_dealer.connect(ipc_paths::router_path());
 
+        orchestrator_dealer.connect(ipc_paths::router_path());
+        orchestrator_sub.set(zmq::sockopt::subscribe, topics::WORKERB);
         orchestrator_sub.set(zmq::sockopt::subscribe, topics::GLOBAL);
         LOG_INFO("workerB", "All connections established");
     }
@@ -58,6 +59,14 @@ int main() {
     LOG_INFO("workerB", "Synchronized and ready");
 
     ThreadPool pool {10};
+    try {
+        orchestrator_dealer.send(zmq::message_t{msg_types::THREAD_INC, std::strlen(msg_types::THREAD_INC)}, zmq::send_flags::sndmore);
+        orchestrator_dealer.send(zmq::message_t("10", 2), zmq::send_flags::none);
+    }
+    catch (const zmq::error_t& e) {
+        LOG_INFO("WorkerB", std::string("workerB: failed to send THREAD_INC to orchestrator: ") + e.what());
+        exit(EXIT_FAILURE);
+    }
     std::mutex result_queue_lock;
     std::queue<data> result_queue;
 
@@ -104,7 +113,33 @@ int main() {
 
                 status = orchestrator_sub.recv(msg);
                 if (!status.has_value()) continue;
-                
+
+                update_ms update {};
+                if (std::string{static_cast<char*>(topic.data()), topic.size()} == topics::workerb_topic()) {
+                    memcpy(&update, msg.data(), sizeof(update_ms));
+                    std::string msg_type;
+                    std::string action;
+                    switch (update.t) {
+                        case update_type::THREAD_INC:
+                            pool.add_n_threads(update.resize);
+                            msg_type = msg_types::THREAD_INC;
+                            action = "incremented";
+                            break;
+                        case update_type::THREAD_DEC:
+                            pool.destroy_n_threads(update.resize);
+                            msg_type = msg_types::THREAD_DEC;
+                            action = "decremented";
+                            break;
+                        default:
+                            LOG_INFO("WorkerB", "Invalid threadpool resize value");
+                            continue;
+                    }
+                    LOG_INFO("WorkerB", "Threadpool " + action + " by: " + std::to_string(update.resize));
+                    std::string resize_val {std::to_string(update.resize)};
+                    orchestrator_dealer.send(zmq::message_t{msg_type.c_str(), std::strlen(msg_type.c_str())}, zmq::send_flags::sndmore);
+                    orchestrator_dealer.send(zmq::message_t{resize_val}, zmq::send_flags::none);
+                }
+
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == messages::SHUTDOWN) {
                     LOG_INFO("workerB", "Shutdown received, proceeding to close");

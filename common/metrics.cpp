@@ -35,12 +35,12 @@ Metrics& Metrics::instance() {
     return m;
 }
 
-void Metrics::inc_worker_A_threads() {
-    worker_A_threads++;
+void Metrics::inc_worker_A_threads(int inc_value = 1) {
+    worker_A_threads += inc_value;
 }
 
-void Metrics::inc_worker_B_threads() {
-    worker_B_threads++;
+void Metrics::inc_worker_B_threads(int inc_value = 1) {
+    worker_B_threads += inc_value;
 }
 
 void Metrics::observe_batch_duration(double seconds) {

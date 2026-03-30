@@ -40,6 +40,8 @@ namespace topics {
 namespace msg_types {
     constexpr const char* BATCH_DURATION = "[BATCH_DURATION]";
     constexpr const char* BATCH_FINISHED = "[BATCH_FINISHED]";
+    constexpr const char* THREAD_INC = "[THREAD_INC]";
+    constexpr const char* THREAD_DEC = "[THREAD_DEC]";
 }
 
 // Sync/control messages

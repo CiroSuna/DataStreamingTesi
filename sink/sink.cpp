@@ -41,7 +41,7 @@ int main() {
 
     LOG_INFO("sink", "Synchronized and ready");
 
-    int batch_size {5};
+    int batch_size {50};
     constexpr int expected_batches {50};
     int received {0};
     int batches_recived {0};

@@ -73,7 +73,7 @@ int main() {
 
             if (items[1].revents & ZMQ_POLLOUT) {
 
-                for (size_t i {0}; i < 5; i++) {
+                for (size_t i {0}; i < 50; i++) {
                     data d{curr_value++};
                     if (i == 0)
                         d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();

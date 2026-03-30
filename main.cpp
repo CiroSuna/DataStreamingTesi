@@ -177,14 +177,40 @@ int main(void){
 
                 switch (sender_id) {
                     case ProcessId::WORKERA:
+                        if(tag_str == msg_types::THREAD_INC) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            Metrics::instance().inc_worker_A_threads(std::stoi(value));
+                        }
+                        else if (tag_str == msg_types::THREAD_DEC) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            Metrics::instance().inc_worker_A_threads(-std::stoi(value));
+                        }
                         break;
                     case ProcessId::WORKERB:
+                        if(tag_str == msg_types::THREAD_INC) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            Metrics::instance().inc_worker_B_threads(std::stoi(value));
+                        }
+                        else if (tag_str == msg_types::THREAD_DEC) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            Metrics::instance().inc_worker_B_threads(-std::stoi(value));
+                        }
                         break;
                     case ProcessId::SENDER:
                         break;
                     case ProcessId::SINK: {
                         if (tag_str == msg_types::BATCH_DURATION) {
                             std::string value {static_cast<char*>(payload.data()), payload.size()};
+
+                            update_ms threadpool_resize {update_type::THREAD_INC, 5};
+                            // Update worker A thread size
+                            orchestrator.send(zmq::message_t {topics::workera_topic()}, zmq::send_flags::sndmore);
+                            orchestrator.send(zmq::message_t{&threadpool_resize, sizeof(update_ms)}, zmq::send_flags::none);
+
+                            // Update worker B thread size
+                            orchestrator.send(zmq::message_t {topics::workerb_topic()}, zmq::send_flags::sndmore);
+                            orchestrator.send(zmq::message_t{&threadpool_resize, sizeof(update_ms)}, zmq::send_flags::none);
+                            
                             Metrics::instance().observe_batch_duration(std::stod(value));
                             LOG_DEBUG("main", "batch duration: " + value + "s");
                         }
@@ -210,7 +236,7 @@ int main(void){
     for (size_t i {0}; i < PIPE_LENGTH; i++)
         waitpid(p_child[i], nullptr, 0);
 
-    // Shutdown listener thread
+    // Shutdown get handler thread
     metrics_exposer.stop();
     metrics_thread.join();
 
