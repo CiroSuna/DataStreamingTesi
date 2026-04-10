@@ -40,8 +40,6 @@ void thread_update(update_type type, const char* worker_topic, int inc_value, zm
     update_ms cmd {type, inc_value};
     update_socket.send(zmq_str(worker_topic), zmq::send_flags::sndmore);
     update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
-    update_socket.send(zmq_str(topics::WORKERB), zmq::send_flags::sndmore);
-    update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
 }
 // Update EMA estimates and apply scaling policy on each new item latency
 void handle_item_latency(const item_latency& lat, QueueState& qs, zmq::socket_t& orchestrator) {
