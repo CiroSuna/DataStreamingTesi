@@ -1,5 +1,7 @@
 #include <iostream>
 #include <cstdio>
+#include <cstring>
+#include <cmath>
 #include <zmq.hpp>
 #include <unistd.h>
 #include "threadPool.hpp"
@@ -11,9 +13,87 @@
 
 
 constexpr int PIPE_LENGTH {4};
+constexpr int WARMUP_ITEMS {20};
+constexpr double alpha {0.1};
+constexpr double W_threshold_multiplier {1.5};  // W_threshold = W_ema_baseline * this
 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
+
+// All information to model the queue as M/M/c 
+struct QueueState {
+    double lambda {0.0};
+    double W_ema {0.0};
+    double mu_ema {0.0};
+    double W_threshold {0.0};  // set at end of warmup: W_ema_baseline * W_threshold_multiplier
+    double sum_W {0.0};
+    double sum_mu {0.0};
+    int warmup_count {0};
+    int64_t warmup_start_time {0};
+    int64_t last_arrival_time {0};
+    int threads_A {10};
+    int threads_B {10};
+};
+
+// Update thread count
+void thread_update(update_type type, const char* worker_topic, int inc_value, zmq::socket_t& update_socket) {
+    update_ms cmd {type, inc_value};
+    update_socket.send(zmq_str(worker_topic), zmq::send_flags::sndmore);
+    update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
+    update_socket.send(zmq_str(topics::WORKERB), zmq::send_flags::sndmore);
+    update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
+}
+// Update EMA estimates and apply scaling policy on each new item latency
+void handle_item_latency(const item_latency& lat, QueueState& qs, zmq::socket_t& orchestrator) {
+    Metrics::instance().observe_item_latency(lat);
+
+    int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
+
+    if (qs.warmup_count < WARMUP_ITEMS) {
+        if (qs.warmup_count == 0)
+            qs.warmup_start_time = now;
+
+        qs.sum_W  += lat.end_to_end;
+        qs.sum_mu += lat.sender_to_A;
+        qs.warmup_count++;
+
+        if (qs.warmup_count == WARMUP_ITEMS) {
+            double elapsed_seconds = (now - qs.warmup_start_time) * 1e-9;
+            qs.W_ema  = qs.sum_W  / WARMUP_ITEMS;
+            qs.mu_ema = 1.0 / (qs.sum_mu / WARMUP_ITEMS);
+            qs.lambda = WARMUP_ITEMS / elapsed_seconds;
+            qs.W_threshold = qs.W_ema * W_threshold_multiplier;
+            qs.last_arrival_time = now;
+            LOG_INFO("main", "Warmup complete: lambda=" + std::to_string(qs.lambda) +
+                     " mu=" + std::to_string(qs.mu_ema) +
+                     " W=" + std::to_string(qs.W_ema) +
+                     " W_threshold=" + std::to_string(qs.W_threshold));
+        }
+    } else {
+        // EMA update
+        qs.W_ema  = alpha * lat.end_to_end + (1.0 - alpha) * qs.W_ema;
+        qs.mu_ema = alpha * (1.0 / lat.sender_to_A) + (1.0 - alpha) * qs.mu_ema;
+
+        double inter_arrival = (now - qs.last_arrival_time) * 1e-9;
+        qs.lambda = alpha * (1.0 / inter_arrival) + (1.0 - alpha) * qs.lambda;
+        qs.last_arrival_time = now;
+
+        // Minimum servers required for stability: rho = lambda/(c*mu) < 1
+        int c_min = static_cast<int>(std::ceil(qs.lambda / qs.mu_ema));
+
+        if (qs.W_ema > qs.W_threshold) {
+
+            thread_update(update_type::THREAD_INC, topics::WORKERA, 1, orchestrator);
+            thread_update(update_type::THREAD_INC, topics::WORKERB, 1, orchestrator);
+            // threads_A/B and Metrics updated when worker confirms via router
+        }
+        else if (qs.W_ema < qs.W_threshold / 2.0 && qs.threads_A > c_min && qs.threads_B > c_min) {
+            thread_update(update_type::THREAD_DEC, topics::WORKERA, 1, orchestrator);
+            thread_update(update_type::THREAD_DEC, topics::WORKERB, 1, orchestrator);
+            // threads_A/B and Metrics updated when worker confirms via router
+        }
+    }
+}
 
 // Exiting on error function
 [[noreturn]] void fatal(const std::string& msg) {
@@ -73,7 +153,7 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
             if (r == messages::READY) {
                 ++ready_count;
                 LOG_INFO("main", "Worker ready (" + std::to_string(ready_count) + "/" + std::to_string(expected) + ")");
-                sync_socket.send(zmq::message_t(messages::GO, 2), zmq::send_flags::none);
+                sync_socket.send(zmq_str(messages::GO), zmq::send_flags::none);
             }
         }
         catch (const zmq::error_t& e) {
@@ -86,6 +166,10 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
 
 
 int main(void){
+
+    // Variables for calculating system stability and little formula
+    QueueState qs {};
+
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
@@ -156,7 +240,7 @@ int main(void){
                 }
 
                 LOG_INFO("main", "sink: " + final_str + " dato arrivato al sink");
-                sync_socket.send(zmq::message_t(messages::OK, 2), zmq::send_flags::none);  
+                sync_socket.send(zmq_str(messages::OK), zmq::send_flags::none);  
                 break;
             }
 
@@ -175,44 +259,44 @@ int main(void){
                 )};
                 std::string tag_str {static_cast<char*>(tag.data()), tag.size()};
 
+                // Handle request from process node
                 switch (sender_id) {
                     case ProcessId::WORKERA:
                         if(tag_str == msg_types::THREAD_INC) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-                            Metrics::instance().inc_worker_A_threads(std::stoi(value));
+                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
+                            Metrics::instance().inc_worker_A_threads(val);
+                            qs.threads_A += val;
                         }
                         else if (tag_str == msg_types::THREAD_DEC) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-                            Metrics::instance().inc_worker_A_threads(-std::stoi(value));
+                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
+                            Metrics::instance().inc_worker_A_threads(-val);
+                            qs.threads_A -= val;
                         }
                         break;
                     case ProcessId::WORKERB:
                         if(tag_str == msg_types::THREAD_INC) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-                            Metrics::instance().inc_worker_B_threads(std::stoi(value));
+                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
+                            Metrics::instance().inc_worker_B_threads(val);
+                            qs.threads_B += val;
                         }
                         else if (tag_str == msg_types::THREAD_DEC) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-                            Metrics::instance().inc_worker_B_threads(-std::stoi(value));
+                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
+                            Metrics::instance().inc_worker_B_threads(-val);
+                            qs.threads_B -= val;
                         }
                         break;
                     case ProcessId::SENDER:
+                        if (tag_str == msg_types::LAMBDA_UPDATE) {
+                            std::string value {static_cast<char*>(payload.data()), payload.size()};
+                            int new_lambda {std::stoi(value)};
+
+                        }
                         break;
                     case ProcessId::SINK: {
-                        if (tag_str == msg_types::BATCH_DURATION) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-
-                            update_ms threadpool_resize {update_type::THREAD_INC, 5};
-                            // Update worker A thread size
-                            orchestrator.send(zmq::message_t {topics::workera_topic()}, zmq::send_flags::sndmore);
-                            orchestrator.send(zmq::message_t{&threadpool_resize, sizeof(update_ms)}, zmq::send_flags::none);
-
-                            // Update worker B thread size
-                            orchestrator.send(zmq::message_t {topics::workerb_topic()}, zmq::send_flags::sndmore);
-                            orchestrator.send(zmq::message_t{&threadpool_resize, sizeof(update_ms)}, zmq::send_flags::none);
-                            
-                            Metrics::instance().observe_batch_duration(std::stod(value));
-                            LOG_DEBUG("main", "batch duration: " + value + "s");
+                        if (tag_str == msg_types::ITEM_LATENCY) {
+                            item_latency lat {};
+                            memcpy(&lat, payload.data(), sizeof(item_latency));
+                            handle_item_latency(lat, qs, orchestrator);
                         }
                         break;
                     }
@@ -228,8 +312,8 @@ int main(void){
         fatal(std::string("Error waiting for sink END message: ") + e.what());
     }
 
-    orchestrator.send(zmq::message_t(topics::global_topic()), zmq::send_flags::sndmore);
-    orchestrator.send(zmq::message_t(messages::SHUTDOWN, 8), zmq::send_flags::none);
+    orchestrator.send(zmq_str(topics::GLOBAL), zmq::send_flags::sndmore);
+    orchestrator.send(zmq_str(messages::SHUTDOWN), zmq::send_flags::none);
     
     // Wait for all children to finish before closing sockets
     // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored

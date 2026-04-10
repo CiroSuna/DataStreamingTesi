@@ -66,8 +66,8 @@ int main() {
     LOG_INFO("WorkerA", "initial numebr of threads in worker A threadpool is: " + std::to_string(inital_pool_threads));
 
     try {
-        orchestrator_dealer.send(zmq::message_t{msg_types::THREAD_INC, std::strlen(msg_types::THREAD_INC)}, zmq::send_flags::sndmore);
-        orchestrator_dealer.send(zmq::message_t("10", 2), zmq::send_flags::none);
+        orchestrator_dealer.send(zmq_str(msg_types::THREAD_INC), zmq::send_flags::sndmore);
+        orchestrator_dealer.send(zmq_str("10"), zmq::send_flags::none);
     }
     catch(zmq::error_t& e) {
         LOG_INFO("WorkerA", std::string("workerA: failed to send THRAD_INC to orchestrator: ") + e.what());
@@ -105,6 +105,7 @@ int main() {
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     data processed {d};
                     processed.curr_value += fib(processed.original_value % 30);
+                    processed.workerA_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     LOG_DEBUG("workerA", "Thread " + tid_ss.str() + " done -> " + std::to_string(processed.curr_value));
 
                     std::unique_lock<std::mutex> lock(result_queue_lock);
@@ -148,8 +149,8 @@ int main() {
                     }
                     LOG_INFO("WorkerA", "Threadpool " + action + " by: " + std::to_string(update.resize));
                     std::string resize_val {std::to_string(update.resize)};
-                    orchestrator_dealer.send(zmq::message_t {msg_type.c_str(), std::strlen(msg_type.c_str())}, zmq::send_flags::sndmore);
-                    orchestrator_dealer.send(zmq::message_t {resize_val}, zmq::send_flags::none);
+                    orchestrator_dealer.send(zmq_str(msg_type.c_str()), zmq::send_flags::sndmore);
+                    orchestrator_dealer.send(zmq_str(resize_val.c_str()), zmq::send_flags::none);
                 }
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == messages::SHUTDOWN) {

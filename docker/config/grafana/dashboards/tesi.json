@@ -14,10 +14,89 @@
       "id": 1,
       "options": {},
       "targets": [
-        {"expr": "histogram_quantile(0.95, rate(batch_duration_seconds_bucket[1m]))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.50, rate(batch_duration_seconds_bucket[1m]))", "legendFormat": "p50"}
+        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_end_to_end_seconds_bucket[1m]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_end_to_end_seconds_bucket[1m]))", "legendFormat": "p50"},
+        {"expr": "rate(pipeline_latency_end_to_end_seconds_sum[1m]) / rate(pipeline_latency_end_to_end_seconds_count[1m])", "legendFormat": "avg"}
       ],
-      "title": "Batch duration quantiles",
+      "title": "End-to-end latency (sender → sink)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
+      "id": 2,
+      "options": {},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_sender_to_workerA_seconds_bucket[1m]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_sender_to_workerA_seconds_bucket[1m]))", "legendFormat": "p50"}
+      ],
+      "title": "Latency: sender → workerA",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
+      "id": 3,
+      "options": {},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_workerA_to_workerB_seconds_bucket[1m]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerA_to_workerB_seconds_bucket[1m]))", "legendFormat": "p50"}
+      ],
+      "title": "Latency: workerA → workerB",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
+      "id": 4,
+      "options": {},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_workerB_to_sink_seconds_bucket[1m]))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerB_to_sink_seconds_bucket[1m]))", "legendFormat": "p50"}
+      ],
+      "title": "Latency: workerB → sink",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 17},
+      "id": 5,
+      "options": {},
+      "targets": [
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_sender_to_workerA_seconds_bucket[1m]))", "legendFormat": "sender→A p50"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerA_to_workerB_seconds_bucket[1m]))", "legendFormat": "A→B p50"},
+        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerB_to_sink_seconds_bucket[1m]))", "legendFormat": "B→sink p50"}
+      ],
+      "title": "Confronto latenze per stage (p50)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
+      "id": 6,
+      "options": {},
+      "targets": [
+        {"expr": "worker_A_threads", "legendFormat": "workerA threads"},
+        {"expr": "worker_B_threads", "legendFormat": "workerB threads"}
+      ],
+      "title": "Thread attivi nei worker",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 25},
+      "id": 7,
+      "options": {},
+      "targets": [
+        {"expr": "rate(pipeline_latency_end_to_end_seconds_count[1m])", "legendFormat": "throughput (item/s)"}
+      ],
+      "title": "Throughput (λ_out)",
       "type": "timeseries"
     }
   ],

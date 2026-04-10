@@ -41,11 +41,8 @@ int main() {
 
     LOG_INFO("sink", "Synchronized and ready");
 
-    int batch_size {50};
-    constexpr int expected_batches {50};
-    int received {0};
-    int batches_recived {0};
-    int64_t batch_start_time {0};
+    int recived_data {0};
+    constexpr int expected_data {50000};
 
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },
@@ -65,35 +62,32 @@ int main() {
                 data d {};
                 memcpy(&d, msg.data(), sizeof(data));
                 
+                int64_t arrival_time = std::chrono::steady_clock::now().time_since_epoch().count();
+
                 std::string res_message {};
                 if (d.curr_value == d.original_value) res_message = "Dato consinstente!";
                 else res_message = "Dato non consistente";
 
                 LOG_DEBUG("sink", "received data " + std::to_string(d.curr_value) + " " + res_message);
 
-                if (received == 0 && d.send_time != 0)
-                    batch_start_time = d.send_time;
-
-                if (++received == batch_size) {
-                    batches_recived++;
-                    received = 0;
-                    LOG_INFO("sink", "Batch completed (" + std::to_string(batches_recived) + "/" + std::to_string(expected_batches) + ")");
-
-                    if (batch_start_time != 0) {
-                        double duration = (std::chrono::steady_clock::now().time_since_epoch().count() - batch_start_time) * 1e-9;
-                        std::string dur_str = std::to_string(duration);
-                        orchestrator_dealer.send(zmq::message_t{msg_types::BATCH_DURATION, std::strlen(msg_types::BATCH_DURATION)}, zmq::send_flags::sndmore);
-                        orchestrator_dealer.send(zmq::message_t{dur_str.data(), dur_str.size()}, zmq::send_flags::none);
-                        batch_start_time = 0;
-                    } else {
-                        orchestrator_dealer.send(zmq::message_t{msg_types::BATCH_FINISHED, std::strlen(msg_types::BATCH_FINISHED)}, zmq::send_flags::sndmore);
-                        orchestrator_dealer.send(zmq::message_t{}, zmq::send_flags::none);
-                    }
+                if (d.send_time != 0 && d.workerA_time != 0 && d.workerB_time != 0) {
+                    item_latency lat;
+                    lat.sender_to_A = (d.workerA_time - d.send_time)    * 1e-9;
+                    lat.A_to_B      = (d.workerB_time - d.workerA_time) * 1e-9;
+                    lat.B_to_sink   = (arrival_time   - d.workerB_time) * 1e-9;
+                    lat.end_to_end  = (arrival_time   - d.send_time)    * 1e-9;
+                    LOG_DEBUG("sink", "latency [sender->A=" + std::to_string(lat.sender_to_A) +
+                              "s A->B=" + std::to_string(lat.A_to_B) +
+                              "s B->sink=" + std::to_string(lat.B_to_sink) +
+                              "s end-to-end=" + std::to_string(lat.end_to_end) + "s]");
+                    orchestrator_dealer.send(zmq_str(msg_types::ITEM_LATENCY), zmq::send_flags::sndmore);
+                    orchestrator_dealer.send(zmq::message_t{&lat, sizeof(item_latency)}, zmq::send_flags::none);
                 }
 
-                if (batches_recived >= expected_batches) {
+
+                if (++recived_data >= expected_data){
                     // Notify orchestrator and wait for ack
-                    sync_socket.send(zmq::message_t(messages::END, 3), zmq::send_flags::none);
+                    sync_socket.send(zmq_str(messages::END), zmq::send_flags::none);
                     zmq::message_t ack;
                     (void)sync_socket.recv(ack, zmq::recv_flags::none);
                     break;

@@ -38,10 +38,10 @@ namespace topics {
 
 // Tagged message types for router payloads — add new tags here as needed
 namespace msg_types {
-    constexpr const char* BATCH_DURATION = "[BATCH_DURATION]";
-    constexpr const char* BATCH_FINISHED = "[BATCH_FINISHED]";
     constexpr const char* THREAD_INC = "[THREAD_INC]";
     constexpr const char* THREAD_DEC = "[THREAD_DEC]";
+    constexpr const char* LAMBDA_UPDATE = "[LAMBDA_UPDATE]";
+    constexpr const char* ITEM_LATENCY = "[ITEM_LATENCY]";
 }
 
 // Sync/control messages
@@ -78,11 +78,13 @@ enum update_type{
 struct data{
     int curr_value{};
     int original_value{};
-    int64_t send_time{};  // nanoseconds since epoch (set by sender on first item of each batch)
-    data(int _x) : curr_value{_x}, original_value{_x}, send_time{} {}
-    data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x}, send_time{} {}
-    data() : curr_value{}, original_value{}, send_time{} {}
-    data(const data& d) : curr_value{d.curr_value}, original_value{d.original_value}, send_time{d.send_time} {}
+    int64_t send_time{};      // ns: set by sender before sending
+    int64_t workerA_time{};   // ns: set by workerA after processing, before forwarding to workerB
+    int64_t workerB_time{};   // ns: set by workerB after processing, before forwarding to sink
+    data(int _x) : curr_value{_x}, original_value{_x}, send_time{}, workerA_time{}, workerB_time{} {}
+    data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x}, send_time{}, workerA_time{}, workerB_time{} {}
+    data() : curr_value{}, original_value{}, send_time{}, workerA_time{}, workerB_time{} {}
+    data(const data& d) : curr_value{d.curr_value}, original_value{d.original_value}, send_time{d.send_time}, workerA_time{d.workerA_time}, workerB_time{d.workerB_time} {}
 };
 
 struct update_ms {
@@ -90,6 +92,14 @@ struct update_ms {
     int resize {};
     update_ms(update_type _t, int _resize) : t{_t}, resize{_resize} {}
     update_ms() : t{}, resize{} {}
+};
+
+// Per-item pipeline latency, sent by sink to orchestrator
+struct item_latency {
+    double sender_to_A{}; // seconds: sender → workerA
+    double A_to_B{};      // seconds: workerA → workerB
+    double B_to_sink{};   // seconds: workerB → sink
+    double end_to_end{};  // seconds: sender → sink
 };
 
 #endif
