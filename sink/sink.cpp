@@ -72,10 +72,13 @@ int main() {
 
                 if (d.send_time != 0 && d.workerA_time != 0 && d.workerB_time != 0) {
                     item_latency lat;
-                    lat.sender_to_A = (d.workerA_time - d.send_time)    * 1e-9;
-                    lat.A_to_B      = (d.workerB_time - d.workerA_time) * 1e-9;
-                    lat.B_to_sink   = (arrival_time   - d.workerB_time) * 1e-9;
-                    lat.end_to_end  = (arrival_time   - d.send_time)    * 1e-9;
+                    lat.sender_to_A    = (d.workerA_time - d.send_time)    * 1e-9;
+                    lat.A_to_B         = (d.workerB_time - d.workerA_time) * 1e-9;
+                    lat.B_to_sink      = (arrival_time   - d.workerB_time) * 1e-9;
+                    lat.end_to_end     = (arrival_time   - d.send_time)    * 1e-9;
+                    lat.service_time_A = d.workerA_service_time * 1e-9;
+                    lat.service_time_B = d.workerB_service_time * 1e-9;
+                    lat.send_time      = d.send_time;
                     LOG_DEBUG("sink", "latency [sender->A=" + std::to_string(lat.sender_to_A) +
                               "s A->B=" + std::to_string(lat.A_to_B) +
                               "s B->sink=" + std::to_string(lat.B_to_sink) +

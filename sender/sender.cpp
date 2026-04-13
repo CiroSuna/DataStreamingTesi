@@ -50,7 +50,9 @@ int main() {
     };
 
     int curr_value {10};
-
+    int64_t last_send_time {0};
+    int64_t now {0};
+    int64_t inter_arrival {0};
     try {
         while (true) {
             zmq::poll(items, 2, std::chrono::milliseconds(-1));
@@ -76,9 +78,21 @@ int main() {
 
                 for (size_t i {0}; i < 100; i++) {
                     data d{curr_value++};
+                    
+                    now = std::chrono::steady_clock::now().time_since_epoch().count();                    
+                    if (last_send_time > 0.0) {
+                        inter_arrival = now - last_send_time;
+                    }
+                    last_send_time = now;
+                    // Send to orchestrator lambda update
+                    if (inter_arrival > 0) {
+                        orchestrator_dealer.send(zmq_str(msg_types::LAMBDA_UPDATE), zmq::send_flags::sndmore);
+                        orchestrator_dealer.send(zmq::buffer(std::to_string(inter_arrival)), zmq::send_flags::none);
+                    }
                     d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(80));
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(1500));
             }

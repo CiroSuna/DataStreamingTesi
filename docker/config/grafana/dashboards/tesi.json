@@ -77,6 +77,45 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 33},
+      "id": 8,
+      "options": {},
+      "targets": [
+        {"expr": "qs_lambda{worker=\"A\"}", "legendFormat": "λ workerA"},
+        {"expr": "qs_lambda{worker=\"B\"}", "legendFormat": "λ workerB"}
+      ],
+      "title": "λ — Arrival rate (items/s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 33},
+      "id": 9,
+      "options": {},
+      "targets": [
+        {"expr": "qs_mu{worker=\"A\"}", "legendFormat": "μ workerA"},
+        {"expr": "qs_mu{worker=\"B\"}", "legendFormat": "μ workerB"}
+      ],
+      "title": "μ — Service rate (items/s per thread)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 33},
+      "id": 10,
+      "options": {},
+      "targets": [
+        {"expr": "qs_W{worker=\"A\"}", "legendFormat": "W workerA"},
+        {"expr": "qs_W{worker=\"B\"}", "legendFormat": "W workerB"}
+      ],
+      "title": "W — EMA sojourn time (s)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
       "id": 6,
       "options": {},

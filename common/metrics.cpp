@@ -57,6 +57,18 @@ void Metrics::observe_item_latency(const item_latency& lat) {
     latency_end_to_end.observe(lat.end_to_end);
 }
 
+void Metrics::set_queue_state_A(double lambda, double mu, double W) {
+    qs_lambda_A = lambda;
+    qs_mu_A     = mu;
+    qs_W_A      = W;
+}
+
+void Metrics::set_queue_state_B(double lambda, double mu, double W) {
+    qs_lambda_B = lambda;
+    qs_mu_B     = mu;
+    qs_W_B      = W;
+}
+
 std::string Metrics::get_metrics() {
     std::ostringstream oss;
     oss << "# HELP worker_A_threads Active workerA threads\n";
@@ -65,6 +77,18 @@ std::string Metrics::get_metrics() {
     oss << "# HELP worker_B_threads Active workerB threads\n";
     oss << "# TYPE worker_B_threads gauge\n";
     oss << "worker_B_threads " << worker_B_threads << "\n";
+    oss << "# HELP qs_lambda Arrival rate lambda (items/s)\n";
+    oss << "# TYPE qs_lambda gauge\n";
+    oss << "qs_lambda{worker=\"A\"} " << qs_lambda_A << "\n";
+    oss << "qs_lambda{worker=\"B\"} " << qs_lambda_B << "\n";
+    oss << "# HELP qs_mu Service rate mu (items/s per thread)\n";
+    oss << "# TYPE qs_mu gauge\n";
+    oss << "qs_mu{worker=\"A\"} " << qs_mu_A << "\n";
+    oss << "qs_mu{worker=\"B\"} " << qs_mu_B << "\n";
+    oss << "# HELP qs_W EMA sojourn time W (seconds)\n";
+    oss << "# TYPE qs_W gauge\n";
+    oss << "qs_W{worker=\"A\"} " << qs_W_A << "\n";
+    oss << "qs_W{worker=\"B\"} " << qs_W_B << "\n";
     oss << latency_sender_to_A.serialize();
     oss << latency_A_to_B.serialize();
     oss << latency_B_to_sink.serialize();

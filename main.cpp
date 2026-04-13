@@ -20,17 +20,18 @@ constexpr double W_threshold_multiplier {1.5};  // W_threshold = W_ema_baseline 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
 
+void rate_updater() {
+    // TODO: create thread to check if stdin has update value for input item rate (in ms)
+}
 // All information to model the queue as M/M/c 
 struct QueueState {
     double lambda {0.0}; // Items/s to arrive
     double W_ema {0.0}; // End-to-end latency for a single worker
     double mu_ema {0.0}; // Items/s to exit
-    double W_threshold {0.0};  // set at end of warmup: W_ema_baseline * W_threshold_multiplier
+    double W_threshold {0.0};  // set at end of warmup: W_ema_baseline * W_threshold_multiplier, never updated after warmup
     double sum_W {0.0}; // Sum for warmup
     double sum_mu {0.0}; // Sum for warmup
     int warmup_count {0}; // Checks how many items used for warmup
-    int64_t warmup_start_time {0};
-    int64_t last_arrival_time {0};
     int above_threshold_count {0};
     int below_threshold_count {0};
     int K {5}; // Number of times W can go below/above its threshold, used to avoid updates made by outliers
@@ -47,29 +48,27 @@ void thread_update(update_type type, const char* worker_topic, int inc_value, zm
 void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
     Metrics::instance().observe_item_latency(lat);
 
-    int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
     // Warmup stem, aproximating W, lambda and mu with the first n items
     if (qs.warmup_count < WARMUP_ITEMS) {
-        if (qs.warmup_count == 0)
-            qs.warmup_start_time = now;
-
         if (worker == topics::WORKERA) {
             qs.sum_W  += lat.sender_to_A;
-            qs.sum_mu += lat.sender_to_A;
+            qs.sum_mu += 1.0 / lat.service_time_A;
         }
         else {
             qs.sum_W  += lat.A_to_B;
-            qs.sum_mu += lat.A_to_B;
+            qs.sum_mu += 1.0 / lat.service_time_B;
         }
         qs.warmup_count++;
 
+        // When warmup finished starts to calculate approximations
         if (qs.warmup_count == WARMUP_ITEMS) {
-            double elapsed_seconds = (now - qs.warmup_start_time) * 1e-9;
             qs.W_ema  = qs.sum_W  / WARMUP_ITEMS;
-            qs.mu_ema = 1.0 / (qs.sum_mu / WARMUP_ITEMS);
-            qs.lambda = WARMUP_ITEMS / elapsed_seconds;
+            qs.mu_ema = qs.sum_mu / WARMUP_ITEMS;
             qs.W_threshold = qs.W_ema * W_threshold_multiplier;
-            qs.last_arrival_time = now;
+            if (worker == topics::WORKERA)
+                Metrics::instance().set_queue_state_A(qs.lambda, qs.mu_ema, qs.W_ema);
+            else
+                Metrics::instance().set_queue_state_B(qs.lambda, qs.mu_ema, qs.W_ema);
             LOG_INFO("main", "Warmup complete: lambda=" + std::to_string(qs.lambda) +
                      " mu=" + std::to_string(qs.mu_ema) +
                      " W=" + std::to_string(qs.W_ema) +
@@ -79,15 +78,16 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
         // EMA update
         if (worker == topics::WORKERA) {
             qs.W_ema  = alpha * lat.sender_to_A + (1.0 - alpha) * qs.W_ema;
-            qs.mu_ema = alpha * (1.0 / lat.sender_to_A) + (1.0 - alpha) * qs.mu_ema;
+            qs.mu_ema = alpha * (1.0 / lat.service_time_A) + (1.0 - alpha) * qs.mu_ema;
         } else {
             qs.W_ema  = alpha * lat.A_to_B + (1.0 - alpha) * qs.W_ema;
-            qs.mu_ema = alpha * (1.0 / lat.A_to_B) + (1.0 - alpha) * qs.mu_ema;
+            qs.mu_ema = alpha * (1.0 / lat.service_time_B) + (1.0 - alpha) * qs.mu_ema;
         }
 
-        double inter_arrival = (now - qs.last_arrival_time) * 1e-9;
-        qs.lambda = alpha * (1.0 / inter_arrival) + (1.0 - alpha) * qs.lambda;
-        qs.last_arrival_time = now;
+        if (worker == topics::WORKERA)
+            Metrics::instance().set_queue_state_A(qs.lambda, qs.mu_ema, qs.W_ema);
+        else
+            Metrics::instance().set_queue_state_B(qs.lambda, qs.mu_ema, qs.W_ema);
 
         // Minimum servers required for stability: rho = lambda/(c*mu) < 1
         int c_min = static_cast<int>(std::ceil(qs.lambda / qs.mu_ema));
@@ -302,9 +302,11 @@ int main(void){
                         break;
                     case ProcessId::SENDER:
                         if (tag_str == msg_types::LAMBDA_UPDATE) {
-                            std::string value {static_cast<char*>(payload.data()), payload.size()};
-                            int new_lambda {std::stoi(value)};
-
+                            std::string payload_str {static_cast<char*>(payload.data()), payload.size()};
+                            int64_t int_arr_ns = std::stoll(payload_str);
+                            double new_lambda = 1.0 / (int_arr_ns * 1e-9);
+                            qsA.lambda = alpha * new_lambda + (1.0 - alpha) * qsA.lambda;
+                            qsB.lambda = alpha * new_lambda + (1.0 - alpha) * qsB.lambda;
                         }
                         break;
                     case ProcessId::SINK: {

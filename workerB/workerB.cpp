@@ -94,10 +94,12 @@ int main() {
                     tid_ss << std::this_thread::get_id();
                     LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
 
+                    int64_t t_start = std::chrono::steady_clock::now().time_since_epoch().count();
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     data processed {d};
                     processed.curr_value -= fib(processed.original_value % 30);
                     processed.workerB_time = std::chrono::steady_clock::now().time_since_epoch().count();
+                    processed.workerB_service_time = processed.workerB_time - t_start;
                     LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " done -> " + std::to_string(processed.curr_value));
 
                     std::unique_lock<std::mutex> lock(result_queue_lock);
