@@ -22,17 +22,19 @@ std::atomic<bool> end_pipe {false};
 
 // All information to model the queue as M/M/c 
 struct QueueState {
-    double lambda {0.0};
-    double W_ema {0.0};
-    double mu_ema {0.0};
+    double lambda {0.0}; // Items/s to arrive
+    double W_ema {0.0}; // End-to-end latency for a single worker
+    double mu_ema {0.0}; // Items/s to exit
     double W_threshold {0.0};  // set at end of warmup: W_ema_baseline * W_threshold_multiplier
-    double sum_W {0.0};
-    double sum_mu {0.0};
-    int warmup_count {0};
+    double sum_W {0.0}; // Sum for warmup
+    double sum_mu {0.0}; // Sum for warmup
+    int warmup_count {0}; // Checks how many items used for warmup
     int64_t warmup_start_time {0};
     int64_t last_arrival_time {0};
-    int threads_A {10};
-    int threads_B {10};
+    int above_threshold_count {0};
+    int below_threshold_count {0};
+    int K {5}; // Number of times W can go below/above its threshold, used to avoid updates made by outliers
+    int threads {10}; // Thread present in a worker node
 };
 
 // Update thread count
@@ -42,17 +44,23 @@ void thread_update(update_type type, const char* worker_topic, int inc_value, zm
     update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
 }
 // Update EMA estimates and apply scaling policy on each new item latency
-void handle_item_latency(const item_latency& lat, QueueState& qs, zmq::socket_t& orchestrator) {
+void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
     Metrics::instance().observe_item_latency(lat);
 
     int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
-
+    // Warmup stem, aproximating W, lambda and mu with the first n items
     if (qs.warmup_count < WARMUP_ITEMS) {
         if (qs.warmup_count == 0)
             qs.warmup_start_time = now;
 
-        qs.sum_W  += lat.end_to_end;
-        qs.sum_mu += lat.sender_to_A;
+        if (worker == topics::WORKERA) {
+            qs.sum_W  += lat.sender_to_A;
+            qs.sum_mu += lat.sender_to_A;
+        }
+        else {
+            qs.sum_W  += lat.A_to_B;
+            qs.sum_mu += lat.A_to_B;
+        }
         qs.warmup_count++;
 
         if (qs.warmup_count == WARMUP_ITEMS) {
@@ -69,8 +77,13 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, zmq::socket_t&
         }
     } else {
         // EMA update
-        qs.W_ema  = alpha * lat.end_to_end + (1.0 - alpha) * qs.W_ema;
-        qs.mu_ema = alpha * (1.0 / lat.sender_to_A) + (1.0 - alpha) * qs.mu_ema;
+        if (worker == topics::WORKERA) {
+            qs.W_ema  = alpha * lat.sender_to_A + (1.0 - alpha) * qs.W_ema;
+            qs.mu_ema = alpha * (1.0 / lat.sender_to_A) + (1.0 - alpha) * qs.mu_ema;
+        } else {
+            qs.W_ema  = alpha * lat.A_to_B + (1.0 - alpha) * qs.W_ema;
+            qs.mu_ema = alpha * (1.0 / lat.A_to_B) + (1.0 - alpha) * qs.mu_ema;
+        }
 
         double inter_arrival = (now - qs.last_arrival_time) * 1e-9;
         qs.lambda = alpha * (1.0 / inter_arrival) + (1.0 - alpha) * qs.lambda;
@@ -80,15 +93,26 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, zmq::socket_t&
         int c_min = static_cast<int>(std::ceil(qs.lambda / qs.mu_ema));
 
         if (qs.W_ema > qs.W_threshold) {
-
-            thread_update(update_type::THREAD_INC, topics::WORKERA, 1, orchestrator);
-            thread_update(update_type::THREAD_INC, topics::WORKERB, 1, orchestrator);
-            // threads_A/B and Metrics updated when worker confirms via router
+            qs.above_threshold_count++;
+            qs.below_threshold_count = 0;
+            if (qs.above_threshold_count >= qs.K) {
+                thread_update(update_type::THREAD_INC, worker, 1, orchestrator);
+                qs.above_threshold_count = 0;
+                // threads updated when worker confirms via router
+            }
         }
-        else if (qs.W_ema < qs.W_threshold / 2.0 && qs.threads_A > c_min && qs.threads_B > c_min) {
-            thread_update(update_type::THREAD_DEC, topics::WORKERA, 1, orchestrator);
-            thread_update(update_type::THREAD_DEC, topics::WORKERB, 1, orchestrator);
-            // threads_A/B and Metrics updated when worker confirms via router
+        else if (qs.W_ema < qs.W_threshold / 2.0 && qs.threads > c_min) {
+            qs.below_threshold_count++;
+            qs.above_threshold_count = 0;
+            if (qs.below_threshold_count >= qs.K) {
+                thread_update(update_type::THREAD_DEC, worker, 1, orchestrator);
+                qs.below_threshold_count = 0;
+                // threads updated when worker confirms via router
+            }
+        }
+        else {
+            qs.above_threshold_count = 0;
+            qs.below_threshold_count = 0;
         }
     }
 }
@@ -166,7 +190,8 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
 int main(void){
 
     // Variables for calculating system stability and little formula
-    QueueState qs {};
+    QueueState qsA {};
+    QueueState qsB {};
 
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
@@ -260,27 +285,19 @@ int main(void){
                 // Handle request from process node
                 switch (sender_id) {
                     case ProcessId::WORKERA:
-                        if(tag_str == msg_types::THREAD_INC) {
+                        if (tag_str == msg_types::THREAD_INC || tag_str == msg_types::THREAD_DEC) {
                             int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            Metrics::instance().inc_worker_A_threads(val);
-                            qs.threads_A += val;
-                        }
-                        else if (tag_str == msg_types::THREAD_DEC) {
-                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            Metrics::instance().inc_worker_A_threads(-val);
-                            qs.threads_A -= val;
+                            int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
+                            Metrics::instance().inc_worker_A_threads(sign * val);
+                            qsA.threads += sign * val;
                         }
                         break;
                     case ProcessId::WORKERB:
-                        if(tag_str == msg_types::THREAD_INC) {
+                        if (tag_str == msg_types::THREAD_INC || tag_str == msg_types::THREAD_DEC) {
                             int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            Metrics::instance().inc_worker_B_threads(val);
-                            qs.threads_B += val;
-                        }
-                        else if (tag_str == msg_types::THREAD_DEC) {
-                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            Metrics::instance().inc_worker_B_threads(-val);
-                            qs.threads_B -= val;
+                            int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
+                            Metrics::instance().inc_worker_B_threads(sign * val);
+                            qsB.threads += sign * val;
                         }
                         break;
                     case ProcessId::SENDER:
@@ -294,7 +311,8 @@ int main(void){
                         if (tag_str == msg_types::ITEM_LATENCY) {
                             item_latency lat {};
                             memcpy(&lat, payload.data(), sizeof(item_latency));
-                            handle_item_latency(lat, qs, orchestrator);
+                            handle_item_latency(lat, qsA, topics::WORKERA, orchestrator);
+                            handle_item_latency(lat, qsB, topics::WORKERB, orchestrator);
                         }
                         break;
                     }

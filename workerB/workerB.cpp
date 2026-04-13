@@ -94,7 +94,7 @@ int main() {
                     tid_ss << std::this_thread::get_id();
                     LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
 
-                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     data processed {d};
                     processed.curr_value -= fib(processed.original_value % 30);
                     processed.workerB_time = std::chrono::steady_clock::now().time_since_epoch().count();
