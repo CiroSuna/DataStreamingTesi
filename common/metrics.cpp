@@ -1,4 +1,5 @@
 #include "metrics.hpp"
+#include "dataTypes.hpp"
 #include <sstream>
 
 LatencyHistogram::LatencyHistogram(const std::string& n, const std::string& h)
@@ -34,19 +35,18 @@ Metrics::Metrics()
       latency_A_to_B{"pipeline_latency_workerA_to_workerB_seconds", "Latency from workerA to workerB per item"},
       latency_B_to_sink{"pipeline_latency_workerB_to_sink_seconds", "Latency from workerB to sink per item"},
       latency_end_to_end{"pipeline_latency_end_to_end_seconds", "End-to-end latency per item through the pipeline"}
-{}
+{
+    workers_info[topics::WORKERA].label = "A";
+    workers_info[topics::WORKERB].label = "B";
+}
 
 Metrics& Metrics::instance() {
     static Metrics m;
     return m;
 }
 
-void Metrics::inc_worker_A_threads(int inc_value) {
-    worker_A_threads += inc_value;
-}
-
-void Metrics::inc_worker_B_threads(int inc_value) {
-    worker_B_threads += inc_value;
+void Metrics::inc_worker_threads(int inc_value, const char* worker) {
+    workers_info[worker].threads += inc_value;
 }
 
 // Update histogram with new latencys
@@ -57,38 +57,31 @@ void Metrics::observe_item_latency(const item_latency& lat) {
     latency_end_to_end.observe(lat.end_to_end);
 }
 
-void Metrics::set_queue_state_A(double lambda, double mu, double W) {
-    qs_lambda_A = lambda;
-    qs_mu_A     = mu;
-    qs_W_A      = W;
+void Metrics::set_queue_state(double lambda, double mu, double W, int L, const char * worker) {
+    workers_info[worker].lambda = lambda;
+    workers_info[worker].mu = mu;
+    workers_info[worker].W = W;
+    workers_info[worker].L = L;
 }
 
-void Metrics::set_queue_state_B(double lambda, double mu, double W) {
-    qs_lambda_B = lambda;
-    qs_mu_B     = mu;
-    qs_W_B      = W;
-}
 
 std::string Metrics::get_metrics() {
     std::ostringstream oss;
-    oss << "# HELP worker_A_threads Active workerA threads\n";
-    oss << "# TYPE worker_A_threads gauge\n";
-    oss << "worker_A_threads " << worker_A_threads << "\n";
-    oss << "# HELP worker_B_threads Active workerB threads\n";
-    oss << "# TYPE worker_B_threads gauge\n";
-    oss << "worker_B_threads " << worker_B_threads << "\n";
-    oss << "# HELP qs_lambda Arrival rate lambda (items/s)\n";
-    oss << "# TYPE qs_lambda gauge\n";
-    oss << "qs_lambda{worker=\"A\"} " << qs_lambda_A << "\n";
-    oss << "qs_lambda{worker=\"B\"} " << qs_lambda_B << "\n";
-    oss << "# HELP qs_mu Service rate mu (items/s per thread)\n";
-    oss << "# TYPE qs_mu gauge\n";
-    oss << "qs_mu{worker=\"A\"} " << qs_mu_A << "\n";
-    oss << "qs_mu{worker=\"B\"} " << qs_mu_B << "\n";
-    oss << "# HELP qs_W EMA sojourn time W (seconds)\n";
-    oss << "# TYPE qs_W gauge\n";
-    oss << "qs_W{worker=\"A\"} " << qs_W_A << "\n";
-    oss << "qs_W{worker=\"B\"} " << qs_W_B << "\n";
+
+    // Aux function to format metrics for all workers
+    auto emit_gauge = [&](const std::string& name, const std::string& help, auto getter) {
+        oss << "# HELP " << name << " " << help << "\n";
+        oss << "# TYPE " << name << " gauge\n";
+        for (const auto& [topic, ws] : workers_info)
+            oss << name << "{worker=\"" << ws.label << "\"} " << getter(ws) << "\n";
+    };
+
+    emit_gauge("worker_threads", "Active threads in worker", [](const WorkerState& ws){ return ws.threads; });
+    emit_gauge("qs_lambda", "Arrival rate lambda (items/s)", [](const WorkerState& ws){ return ws.lambda; });
+    emit_gauge("qs_mu", "Service rate mu (items/s per thread)", [](const WorkerState& ws){ return ws.mu; });
+    emit_gauge("qs_W", "EMA sojourn time W (seconds)", [](const WorkerState& ws){ return ws.W; });
+    emit_gauge("qs_L", "Estimated queue length via Little's Law",[](const WorkerState& ws){ return ws.L; });
+
     oss << latency_sender_to_A.serialize();
     oss << latency_A_to_B.serialize();
     oss << latency_B_to_sink.serialize();

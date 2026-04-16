@@ -3,6 +3,7 @@
 #include <atomic>
 #include <vector>
 #include "dataTypes.hpp"
+#include <unordered_map>
 
 struct LatencyHistogram {
     std::string name;
@@ -17,26 +18,25 @@ struct LatencyHistogram {
     std::string serialize() const;
 };
 
+struct WorkerState {
+    double lambda {0.0};
+    int threads {0};
+    double mu {0.0};
+    double W {0.0};
+    int L {0};
+    std::string label;
+};
+
 class Metrics {
 public:
     static Metrics& instance();
-    void inc_worker_A_threads(int inc_value);
-    void inc_worker_B_threads(int inc_value);
+    void inc_worker_threads(int inc_value, const char* worker);
     void observe_item_latency(const item_latency& lat);
-    void set_queue_state_A(double lambda, double mu, double W);
-    void set_queue_state_B(double lambda, double mu, double W);
+    void set_queue_state(double lambda, double mu, double W, int L, const char* worker);
     std::string get_metrics();
 private:
     Metrics();
-    int http_requests_total = 0;
-    int worker_A_threads = 0;
-    int worker_B_threads = 0;
-    double qs_lambda_A{0.0};
-    double qs_mu_A{0.0};
-    double qs_W_A{0.0};
-    double qs_lambda_B{0.0};
-    double qs_mu_B{0.0};
-    double qs_W_B{0.0};
+    std::unordered_map<std::string, WorkerState> workers_info;
     LatencyHistogram latency_sender_to_A;
     LatencyHistogram latency_A_to_B;
     LatencyHistogram latency_B_to_sink;

@@ -24,46 +24,7 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {"defaults": {},"overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 9},
-      "id": 2,
-      "options": {},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_sender_to_workerA_seconds_bucket[1m]))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_sender_to_workerA_seconds_bucket[1m]))", "legendFormat": "p50"}
-      ],
-      "title": "Latency: sender → workerA",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {},"overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 9},
-      "id": 3,
-      "options": {},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_workerA_to_workerB_seconds_bucket[1m]))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerA_to_workerB_seconds_bucket[1m]))", "legendFormat": "p50"}
-      ],
-      "title": "Latency: workerA → workerB",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {},"overrides": []},
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 9},
-      "id": 4,
-      "options": {},
-      "targets": [
-        {"expr": "histogram_quantile(0.95, rate(pipeline_latency_workerB_to_sink_seconds_bucket[1m]))", "legendFormat": "p95"},
-        {"expr": "histogram_quantile(0.50, rate(pipeline_latency_workerB_to_sink_seconds_bucket[1m]))", "legendFormat": "p50"}
-      ],
-      "title": "Latency: workerB → sink",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "Prometheus",
-      "fieldConfig": {"defaults": {},"overrides": []},
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 17},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 9},
       "id": 5,
       "options": {},
       "targets": [
@@ -116,12 +77,25 @@
     {
       "datasource": "Prometheus",
       "fieldConfig": {"defaults": {},"overrides": []},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 41},
+      "id": 11,
+      "options": {},
+      "targets": [
+        {"expr": "qs_L{worker=\"A\"}", "legendFormat": "N workerA"},
+        {"expr": "qs_L{worker=\"B\"}", "legendFormat": "N workerB"}
+      ],
+      "title": "N — Estimated queue length (Little's Law: λ·Wq)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {"defaults": {},"overrides": []},
       "gridPos": {"h": 8, "w": 12, "x": 0, "y": 25},
       "id": 6,
       "options": {},
       "targets": [
-        {"expr": "worker_A_threads", "legendFormat": "workerA threads"},
-        {"expr": "worker_B_threads", "legendFormat": "workerB threads"}
+        {"expr": "worker_threads{worker=\"A\"}", "legendFormat": "workerA threads"},
+        {"expr": "worker_threads{worker=\"B\"}", "legendFormat": "workerB threads"}
       ],
       "title": "Thread attivi nei worker",
       "type": "timeseries"

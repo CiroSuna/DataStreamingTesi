@@ -62,6 +62,7 @@ enum class ProcessId {
     UNKNOWN
 };
 
+
 inline ProcessId parse_process_id(const std::string& id) {
     if (id == topics::WORKERA) return ProcessId::WORKERA;
     if (id == topics::WORKERB) return ProcessId::WORKERB;

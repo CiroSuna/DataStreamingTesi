@@ -92,9 +92,8 @@ int main() {
                     d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
                 }
-                std::this_thread::sleep_for(std::chrono::milliseconds(1500));
             }
         }
     }

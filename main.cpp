@@ -15,27 +15,46 @@
 constexpr int PIPE_LENGTH {4};
 constexpr int WARMUP_ITEMS {20};
 constexpr double alpha {0.1};
-constexpr double W_threshold_multiplier {1.5};  // W_threshold = W_ema_baseline * this
+constexpr double p_target {0.7};
 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
 
-void rate_updater() {
-    // TODO: create thread to check if stdin has update value for input item rate (in ms)
+void rate_updater(std::atomic<int>& send_rate) {
+    std::string new_rate;
+    int rate {};
+    while (true) {
+        std::cout << "Insert a new send rate (in ms)\n";
+        std::cin >> new_rate; 
+        try {
+            rate = std::stoi(new_rate);
+        }
+        catch (std::invalid_argument& e) {
+            std::cout << "Invalid argument " << e.what();
+            continue;
+        }
+        catch (std::out_of_range& e) {
+            std::cout << "Out of range number" << e.what();
+            continue;
+        }
+        std::cout << '\n';
+        send_rate.store(rate); 
+        std::cout << send_rate.load();
+    }
 }
-// All information to model the queue as M/M/c 
+
 struct QueueState {
     double lambda {0.0}; // Items/s to arrive
     double W_ema {0.0}; // End-to-end latency for a single worker
     double mu_ema {0.0}; // Items/s to exit
-    double W_threshold {0.0};  // set at end of warmup: W_ema_baseline * W_threshold_multiplier, never updated after warmup
     double sum_W {0.0}; // Sum for warmup
     double sum_mu {0.0}; // Sum for warmup
     int warmup_count {0}; // Checks how many items used for warmup
     int above_threshold_count {0};
     int below_threshold_count {0};
     int K {5}; // Number of times W can go below/above its threshold, used to avoid updates made by outliers
-    int threads {10}; // Thread present in a worker node
+    int threads {0}; // Thread present in a worker node
+    double L_estimated {0.0}; // Estimated queue length via Little's Law: lambda * (W - 1/mu)
 };
 
 // Update thread count
@@ -64,15 +83,11 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
         if (qs.warmup_count == WARMUP_ITEMS) {
             qs.W_ema  = qs.sum_W  / WARMUP_ITEMS;
             qs.mu_ema = qs.sum_mu / WARMUP_ITEMS;
-            qs.W_threshold = qs.W_ema * W_threshold_multiplier;
-            if (worker == topics::WORKERA)
-                Metrics::instance().set_queue_state_A(qs.lambda, qs.mu_ema, qs.W_ema);
-            else
-                Metrics::instance().set_queue_state_B(qs.lambda, qs.mu_ema, qs.W_ema);
+            Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, 0.0, worker);
+
             LOG_INFO("main", "Warmup complete: lambda=" + std::to_string(qs.lambda) +
                      " mu=" + std::to_string(qs.mu_ema) +
-                     " W=" + std::to_string(qs.W_ema) +
-                     " W_threshold=" + std::to_string(qs.W_threshold));
+                     " W=" + std::to_string(qs.W_ema));
         }
     } else {
         // EMA update
@@ -83,25 +98,25 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
             qs.W_ema  = alpha * lat.A_to_B + (1.0 - alpha) * qs.W_ema;
             qs.mu_ema = alpha * (1.0 / lat.service_time_B) + (1.0 - alpha) * qs.mu_ema;
         }
+        qs.L_estimated = static_cast<int>(std::ceil(qs.lambda * (qs.W_ema - 1.0 / qs.mu_ema)));
 
-        if (worker == topics::WORKERA)
-            Metrics::instance().set_queue_state_A(qs.lambda, qs.mu_ema, qs.W_ema);
-        else
-            Metrics::instance().set_queue_state_B(qs.lambda, qs.mu_ema, qs.W_ema);
+        Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, qs.L_estimated, worker);
+        
 
+        if (qs.lambda <= 0.0) return;
         // Minimum servers required for stability: rho = lambda/(c*mu) < 1
-        int c_min = static_cast<int>(std::ceil(qs.lambda / qs.mu_ema));
+        int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
 
-        if (qs.W_ema > qs.W_threshold) {
+        if (qs.threads < c_min) {
             qs.above_threshold_count++;
             qs.below_threshold_count = 0;
             if (qs.above_threshold_count >= qs.K) {
-                thread_update(update_type::THREAD_INC, worker, 1, orchestrator);
+                thread_update(update_type::THREAD_INC, worker, c_min - qs.threads, orchestrator);
                 qs.above_threshold_count = 0;
                 // threads updated when worker confirms via router
             }
         }
-        else if (qs.W_ema < qs.W_threshold / 2.0 && qs.threads > c_min) {
+        else if (qs.threads > c_min) {
             qs.below_threshold_count++;
             qs.above_threshold_count = 0;
             if (qs.below_threshold_count >= qs.K) {
@@ -115,6 +130,13 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
             qs.below_threshold_count = 0;
         }
     }
+}
+
+void thread_update_recv(const std::string& tag_str, const char* worker, const zmq::message_t& payload, QueueState& qs) {
+    int val {std::stoi(std::string{static_cast<const char*>(payload.data()), payload.size()})};
+    int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
+    Metrics::instance().inc_worker_threads(sign * val, worker);
+    qs.threads += sign * val;
 }
 
 // Exiting on error function
@@ -192,7 +214,8 @@ int main(void){
     // Variables for calculating system stability and little formula
     QueueState qsA {};
     QueueState qsB {};
-
+    std::atomic<int> send_rate {15}; // rate at which the sender sends data in ms
+    std::thread rate_updater_thread(rate_updater, std::ref(send_rate));
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
@@ -246,12 +269,11 @@ int main(void){
         {sync_socket, 0, ZMQ_POLLIN, 0},
         {router, 0, ZMQ_POLLIN, 0}
     };
-
+    
     try {
         // Poll loop
         while (true) {
             zmq::poll(items, 2, std::chrono::milliseconds(100));
-            
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t msg_final;
                 (void)sync_socket.recv(msg_final, zmq::recv_flags::none);
@@ -286,18 +308,12 @@ int main(void){
                 switch (sender_id) {
                     case ProcessId::WORKERA:
                         if (tag_str == msg_types::THREAD_INC || tag_str == msg_types::THREAD_DEC) {
-                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
-                            Metrics::instance().inc_worker_A_threads(sign * val);
-                            qsA.threads += sign * val;
+                            thread_update_recv(tag_str, topics::WORKERA, payload, qsA);
                         }
                         break;
                     case ProcessId::WORKERB:
                         if (tag_str == msg_types::THREAD_INC || tag_str == msg_types::THREAD_DEC) {
-                            int val {std::stoi(std::string{static_cast<char*>(payload.data()), payload.size()})};
-                            int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
-                            Metrics::instance().inc_worker_B_threads(sign * val);
-                            qsB.threads += sign * val;
+                            thread_update_recv(tag_str, topics::WORKERB, payload, qsB);
                         }
                         break;
                     case ProcessId::SENDER:
@@ -339,6 +355,7 @@ int main(void){
         waitpid(p_child[i], nullptr, 0);
 
     // Shutdown get handler thread
+    rate_updater_thread.join();
     metrics_exposer.stop();
     metrics_thread.join();
 
