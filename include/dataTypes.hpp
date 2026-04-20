@@ -42,6 +42,7 @@ namespace msg_types {
     constexpr const char* THREAD_DEC = "[THREAD_DEC]";
     constexpr const char* LAMBDA_UPDATE = "[LAMBDA_UPDATE]";
     constexpr const char* ITEM_LATENCY = "[ITEM_LATENCY]";
+    constexpr const char* RATE_UPDATE = "[RATE_UPDATE]";
 }
 
 // Sync/control messages

@@ -15,8 +15,8 @@
 constexpr int PIPE_LENGTH {4};
 constexpr int WARMUP_ITEMS {20};
 constexpr double alpha {0.1};
-constexpr double p_target {0.7};
-
+constexpr double p_target {0.7}; // Percentage at which i want te system to be busy
+constexpr int max_threads {80};
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
 
@@ -24,8 +24,9 @@ void rate_updater(std::atomic<int>& send_rate) {
     std::string new_rate;
     int rate {};
     while (true) {
-        std::cout << "Insert a new send rate (in ms)\n";
+        std::cout << "Insert a new send rate (in ms): \n";
         std::cin >> new_rate; 
+        std::cout << '\n';
         try {
             rate = std::stoi(new_rate);
         }
@@ -215,7 +216,8 @@ int main(void){
     QueueState qsA {};
     QueueState qsB {};
     std::atomic<int> send_rate {15}; // rate at which the sender sends data in ms
-    std::thread rate_updater_thread(rate_updater, std::ref(send_rate));
+    int old_rate {send_rate.load()};
+    
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
@@ -264,7 +266,9 @@ int main(void){
     LOG_INFO("main", "Starting to wait for READY messages...");
     wait_for_ready(sync_socket, PIPE_LENGTH);
     LOG_INFO("main", "All processes synced and in execution");
-
+    
+    // Start thread to check manual send rate update in cin
+    std::thread rate_updater_thread(rate_updater, std::ref(send_rate));
     zmq::pollitem_t items[2] {
         {sync_socket, 0, ZMQ_POLLIN, 0},
         {router, 0, ZMQ_POLLIN, 0}
@@ -322,7 +326,14 @@ int main(void){
                             int64_t int_arr_ns = std::stoll(payload_str);
                             double new_lambda = 1.0 / (int_arr_ns * 1e-9);
                             qsA.lambda = alpha * new_lambda + (1.0 - alpha) * qsA.lambda;
-                            qsB.lambda = alpha * new_lambda + (1.0 - alpha) * qsB.lambda;
+                            // Check if mu is not 0 (warmup is over)
+                            double throughput_A = (qsA.mu_ema > 0.0 && qsA.threads > 0)
+                                ? qsA.mu_ema * qsA.threads
+                                : new_lambda;
+                            
+                            // Choose to use lambda_a or throughput to 
+                            double lambda_B_instant = std::min(qsA.lambda, throughput_A); 
+                            qsB.lambda = alpha * lambda_B_instant + (1.0 - alpha) * qsB.lambda;
                         }
                         break;
                     case ProcessId::SINK: {
@@ -338,6 +349,13 @@ int main(void){
                         LOG_DEBUG("main", "Unknown identity on router socket");
                         break;
                 }
+            }
+            int curr_rate = send_rate.load(); 
+            if (curr_rate != old_rate) {
+                old_rate = curr_rate;
+                orchestrator.send(zmq_str(topics::SENDER), zmq::send_flags::sndmore);
+                orchestrator.send(zmq_str(msg_types::RATE_UPDATE), zmq::send_flags::sndmore);
+                orchestrator.send(zmq::buffer(std::to_string(curr_rate)), zmq::send_flags::none);
             }
         } 
         

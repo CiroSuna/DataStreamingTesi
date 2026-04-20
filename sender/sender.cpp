@@ -27,6 +27,7 @@ int main() {
         orchestrator_dealer.set(zmq::sockopt::routing_id, routing_id);
         orchestrator_dealer.connect(ipc_paths::router_path());
         orchestrator_sub.set(zmq::sockopt::subscribe, topics::GLOBAL);
+        orchestrator_sub.set(zmq::sockopt::subscribe, topics::SENDER);
     }
     catch (zmq::error_t& e) {
         std::cerr << "sender: " << e.what() << '\n';
@@ -50,6 +51,7 @@ int main() {
     };
 
     int curr_value {10};
+    int send_rate {5};
     int64_t last_send_time {0};
     int64_t now {0};
     int64_t inter_arrival {0};
@@ -59,16 +61,28 @@ int main() {
 
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t topic;
+                zmq::message_t msg_type;
                 zmq::message_t msg;
-
+                
                 auto status = orchestrator_sub.recv(topic, zmq::recv_flags::dontwait);
+                if (!status.has_value()) continue;
+
+                status = orchestrator_sub.recv(msg_type, zmq::recv_flags::dontwait);
                 if (!status.has_value()) continue;
 
                 status = orchestrator_sub.recv(msg);
                 if (!status.has_value()) continue;
 
-                std::string r {static_cast<char*>(msg.data()), msg.size()};
-                if (r == messages::SHUTDOWN) {
+                std::string topic_str {static_cast<char*>(topic.data()), topic.size()};
+                std::string msg_type_str {static_cast<char*>(msg_type.data()), msg_type.size()};
+                std::string value_str {static_cast<char*>(msg.data()), msg.size()}; 
+
+                if (msg_type_str == msg_types::RATE_UPDATE) {
+                    int value {std::stoi(value_str)}; 
+                    send_rate = value;
+                }
+
+                if (msg_type_str == messages::SHUTDOWN) {
                     break;
                 }
             }
@@ -92,7 +106,7 @@ int main() {
                     d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(send_rate));
                 }
             }
         }
