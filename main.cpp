@@ -105,7 +105,7 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
         
 
         if (qs.lambda <= 0.0) return;
-        // Minimum servers required for stability: rho = lambda/(c*mu) < 1
+        // Update c_min -> minimun number of thread to keep the system stable, using p_target to make the system not barely holding on
         int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
 
         if (qs.threads < c_min) {
@@ -182,7 +182,7 @@ void on_sigint(int) {
         waitpid(-1, nullptr, 0);
 }
 
-// Wait for "expected" READY messages from child processes, reply GO to each
+// Wait for expected READY messages from child processes, reply GO to each
 void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
     int ready_count {0};
     while (ready_count < expected) {
@@ -246,7 +246,7 @@ int main(void){
     };
 
    
-    // Starting context, sockets and binding FIRST
+    // Starting contex
     zmq::context_t ctx {};
     zmq::socket_t orchestrator {ctx, zmq::socket_type::pub};
     zmq::socket_t sync_socket {ctx, zmq::socket_type::rep};
@@ -269,6 +269,8 @@ int main(void){
     
     // Start thread to check manual send rate update in cin
     std::thread rate_updater_thread(rate_updater, std::ref(send_rate));
+
+
     zmq::pollitem_t items[2] {
         {sync_socket, 0, ZMQ_POLLIN, 0},
         {router, 0, ZMQ_POLLIN, 0}
@@ -331,7 +333,7 @@ int main(void){
                                 ? qsA.mu_ema * qsA.threads
                                 : new_lambda;
                             
-                            // Choose to use lambda_a or throughput to 
+                            // Choose to use lambda_a or throughput, using min because throuput_A can be theorical and be higher than lambda 
                             double lambda_B_instant = std::min(qsA.lambda, throughput_A); 
                             qsB.lambda = alpha * lambda_B_instant + (1.0 - alpha) * qsB.lambda;
                         }

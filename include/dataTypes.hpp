@@ -13,6 +13,8 @@ namespace ipc_paths {
     constexpr const char* SYNC_SOCK = "/tmp/sync.ipc";
     constexpr const char* ROUTER_SOCK = "/tmp/router.ipc"; 
     
+    
+    // TODO: maybe remove ?
     inline std::string orchestrator() { return "ipc:///tmp/orchestrator.ipc"; }
     inline std::string sender_to_workerA() { return "ipc:///tmp/workA.ipc"; }
     inline std::string workerA_to_workerB() { return "ipc:///tmp/workb.ipc"; }
@@ -80,11 +82,11 @@ enum update_type{
 struct data{
     int curr_value{};
     int original_value{};
-    int64_t send_time{};             // ns: set by sender before sending
-    int64_t workerA_time{};          // ns: set by workerA after processing, before forwarding to workerB
-    int64_t workerB_time{};          // ns: set by workerB after processing, before forwarding to sink
-    int64_t workerA_service_time{};  // ns: pure service time in workerA (no queue wait)
-    int64_t workerB_service_time{};  // ns: pure service time in workerB (no queue wait)
+    int64_t send_time{}; // ns: set by sender before sending
+    int64_t workerA_time{}; // ns: set by workerA after processing, before forwarding to workerB
+    int64_t workerB_time{}; // ns: set by workerB after processing, before forwarding to sink
+    int64_t workerA_service_time{}; // ns: pure service time in workerA (no queue wait)
+    int64_t workerB_service_time{}; // ns: pure service time in workerB (no queue wait)
     data(int _x) : curr_value{_x}, original_value{_x}, send_time{}, workerA_time{}, workerB_time{}, workerA_service_time{}, workerB_service_time{} {}
     data(int _x, int _original_x) : curr_value{_x}, original_value{_original_x}, send_time{}, workerA_time{}, workerB_time{}, workerA_service_time{}, workerB_service_time{} {}
     data() : curr_value{}, original_value{}, send_time{}, workerA_time{}, workerB_time{}, workerA_service_time{}, workerB_service_time{} {}
@@ -100,13 +102,13 @@ struct update_ms {
 
 // Per-item pipeline latency, sent by sink to orchestrator
 struct item_latency {
-    double sender_to_A{};    // seconds: sender → workerA (includes queue wait)
-    double A_to_B{};         // seconds: workerA → workerB (includes queue wait)
-    double B_to_sink{};      // seconds: workerB → sink
-    double end_to_end{};     // seconds: sender → sink
+    double sender_to_A{}; // seconds: sender → workerA (includes queue wait)
+    double A_to_B{}; // seconds: workerA → workerB (includes queue wait)
+    double B_to_sink{}; // seconds: workerB → sink
+    double end_to_end{}; // seconds: sender → sink
     double service_time_A{}; // seconds: pure service time in workerA
     double service_time_B{}; // seconds: pure service time in workerB
-    int64_t send_time{};     // ns: original send_time from sender (for lambda estimation)
+    int64_t send_time{}; // ns: original send_time from sender (for lambda estimation)
 };
 
 #endif
