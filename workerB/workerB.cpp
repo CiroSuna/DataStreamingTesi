@@ -4,6 +4,8 @@
 #include <mutex>
 #include <thread>
 #include <chrono>
+#include <random>
+#include <algorithm>
 #include <zmq.hpp>
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
@@ -58,6 +60,11 @@ int main() {
 
     LOG_INFO("workerB", "Synchronized and ready");
 
+    std::mutex result_queue_lock;
+    std::queue<data> result_queue;
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<double> dist(0.0, 1.0);
+
     ThreadPool pool {10};
     try {
         orchestrator_dealer.send(zmq_str(msg_types::THREAD_INC), zmq::send_flags::sndmore);
@@ -67,8 +74,6 @@ int main() {
         LOG_INFO("WorkerB", std::string("workerB: failed to send THREAD_INC to orchestrator: ") + e.what());
         exit(EXIT_FAILURE);
     }
-    std::mutex result_queue_lock;
-    std::queue<data> result_queue;
 
     zmq::pollitem_t items[] = {
         { recv_from_workerA, 0, ZMQ_POLLIN, 0 },
@@ -85,17 +90,20 @@ int main() {
                 auto status = recv_from_workerA.recv(msg, zmq::recv_flags::dontwait);
                 if (!status.has_value()) continue;
 
+                
                 data d {};
                 memcpy(&d, msg.data(), sizeof(data));
                 LOG_DEBUG("workerB", "dato ricevuto da workerA: " + std::to_string(d.curr_value));
 
-                pool.add_task([d, &result_queue, &result_queue_lock]() {
+                pool.add_task([d, &result_queue, &result_queue_lock, &dist, &rng]() {
                     std::ostringstream tid_ss;
                     tid_ss << std::this_thread::get_id();
                     LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
-
+                    // Sleep for
                     int64_t t_start = std::chrono::steady_clock::now().time_since_epoch().count();
-                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    int sleep_ms = (dist(rng) < 0.9) ? 50: 200;
+
+                    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
                     data processed {d};
                     processed.curr_value -= fib(processed.original_value % 30);
                     processed.workerB_time = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -122,23 +130,28 @@ int main() {
                     memcpy(&update, msg.data(), sizeof(update_ms));
                     std::string msg_type;
                     std::string action;
+                    int applied_resize {0};
                     switch (update.t) {
                         case update_type::THREAD_INC:
                             pool.add_n_threads(update.resize);
                             msg_type = msg_types::THREAD_INC;
                             action = "incremented";
+                            applied_resize = update.resize;
                             break;
                         case update_type::THREAD_DEC:
-                            pool.destroy_n_threads(update.resize);
+                            applied_resize = std::min(update.resize, std::max(0, pool.active_threads - 1));
+                            if (applied_resize > 0) {
+                                pool.destroy_n_threads(applied_resize);
+                            }
                             msg_type = msg_types::THREAD_DEC;
-                            action = "decremented";
+                            action = (applied_resize > 0) ? "decremented" : "decrement skipped";
                             break;
                         default:
                             LOG_INFO("WorkerB", "Invalid threadpool resize value");
                             continue;
                     }
-                    LOG_INFO("WorkerB", "Threadpool " + action + " by: " + std::to_string(update.resize));
-                    std::string resize_val {std::to_string(update.resize)};
+                    LOG_INFO("WorkerB", "Threadpool " + action + " by: " + std::to_string(applied_resize));
+                    std::string resize_val {std::to_string(applied_resize)};
                     orchestrator_dealer.send(zmq_str(msg_type.c_str()), zmq::send_flags::sndmore);
                     orchestrator_dealer.send(zmq_str(resize_val.c_str()), zmq::send_flags::none);
                 }

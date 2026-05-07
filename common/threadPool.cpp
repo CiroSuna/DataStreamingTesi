@@ -14,11 +14,11 @@ ThreadPool::ThreadPool(int initial_threads)
 void ThreadPool::shutdown() {
     std::unique_lock<std::mutex> lock(pool_mtx);
     stop = true;
+    pool_notify.notify_all();
 }
 
 ThreadPool::~ThreadPool() {
     shutdown();
-    pool_notify.notify_all();
     for (size_t i{0}; i < thrd_list.size(); ++i) {
         if (thrd_list[i].joinable())
             thrd_list[i].join();
@@ -35,11 +35,12 @@ std::function<void()> ThreadPool::fetch_task_unlocked() {
     task_queue.pop();
     return task;
 }
-
+// TODO: RIGUARDA QUESTO
 // Destroy threads implementation
 void ThreadPool::destroy_n_threads(int n) {
     std::unique_lock<std::mutex> lock(pool_mtx);
-    destroy_count += n; 
+    destroy_count += n;
+    pool_notify.notify_all();
 }
       
 // Cleanup finished threads (MUST be called while holding pool_mtx lock)
@@ -71,16 +72,16 @@ void ThreadPool::thrd_task_loop() {
         { 
             std::unique_lock<std::mutex> lock(pool_mtx);
             pool_notify.wait(lock, [this]() {
-                return !task_queue.empty() || stop;
+                return !task_queue.empty() || stop || destroy_count > 0;
             });
 
-            if (stop || destroy_count > 0) {
-                if (destroy_count > 0) {
-                    destroy_count--;
-                    finished_thread_ids.push_back(std::this_thread::get_id());
-                }
+            if (destroy_count > 0) {
+                destroy_count--;
+                finished_thread_ids.emplace_back(std::this_thread::get_id()); 
                 return;
             }
+            
+            if (stop) return;
             
             // Fetch task using helper (we hold the lock)
             curr_task = fetch_task_unlocked();

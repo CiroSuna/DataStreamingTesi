@@ -44,7 +44,7 @@ TEST_CASE("ThreadPool funzionalità complete", "[threadpool]") {
         // Con 2 thread, solo 2 task possono girare contemporaneamente
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         REQUIRE(running.load() == 2);
-
+        
         // Aggiunta di 2 thread -> ora 4 task girano in parallelo
         pool.add_n_threads(2);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

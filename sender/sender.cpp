@@ -4,6 +4,7 @@
 #include <chrono>
 #include <zmq.hpp>
 #include <unistd.h>
+#include <random>
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
@@ -38,13 +39,6 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    // TEST send
-    /*
-    data d{10};
-    send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
-    std::cout << "Sender: dato mandato verso A\n" << std::flush;
-    */
-
     zmq::pollitem_t items[] = {
         { orchestrator_sub, 0, ZMQ_POLLIN,  0 },
         { send_to_A,        0, ZMQ_POLLOUT, 0 }
@@ -55,6 +49,9 @@ int main() {
     int64_t last_send_time {0};
     int64_t now {0};
     int64_t inter_arrival {0};
+    std::mt19937 rand {std::random_device{}()};
+    std::exponential_distribution<double> dist {1.0 / send_rate};
+
     try {
         while (true) {
             zmq::poll(items, 2, std::chrono::milliseconds(-1));
@@ -78,7 +75,10 @@ int main() {
                 std::string value_str {static_cast<char*>(msg.data()), msg.size()}; 
 
                 if (msg_type_str == msg_types::RATE_UPDATE) {
-                    int value {std::stoi(value_str)}; 
+                    int value = std::stod(value_str); 
+                    if (value > 0) {
+                        dist.param(std::exponential_distribution<double>::param_type(1.0 / value));
+                    }
                     send_rate = value;
                 }
 
@@ -106,7 +106,10 @@ int main() {
                     d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
-                    std::this_thread::sleep_for(std::chrono::milliseconds(send_rate));
+
+                    double wait_ms = dist(rand);
+                    if (wait_ms < 1.0) wait_ms = 1.0; // if wait_ms is too mutch colose to 0
+                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(std::round(wait_ms))));
                 }
             }
         }

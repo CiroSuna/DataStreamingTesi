@@ -17,6 +17,23 @@ void LatencyHistogram::observe(double seconds) {
     sum += seconds;
     count++;
 }
+
+double LatencyHistogram::get_percentile(double p) {
+    if (count == 0) return 0.0;
+    double target = p * count;
+
+    for (size_t i {0}; i < bounds.size(); i++) {
+        if (bucket_counts[i] >= target) {
+            double lower = (i == 0) ? 0.0 : bounds[i - 1]; // lower bound bucket
+            double lower_count = (i == 0) ? 0.0 : bucket_counts[i - 1]; // upper bound bucket
+            double upper = bounds[i]; 
+
+            double fraction = (target - lower_count) /(bucket_counts[i] - lower_count);
+            return lower + fraction * (upper - lower);
+        }
+    } 
+    return bounds.back();
+}
 // Serialize data fot exposition on /metrics
 std::string LatencyHistogram::serialize() const {
     std::ostringstream oss;

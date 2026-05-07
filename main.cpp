@@ -4,6 +4,9 @@
 #include <cmath>
 #include <zmq.hpp>
 #include <unistd.h>
+#include <vector>
+#include <algorithm>
+#include <mutex>
 #include "threadPool.hpp"
 #include "dataTypes.hpp"
 #include "utils.hpp"
@@ -16,7 +19,12 @@ constexpr int PIPE_LENGTH {4};
 constexpr int WARMUP_ITEMS {20};
 constexpr double alpha {0.1};
 constexpr double p_target {0.7}; // Percentage at which i want te system to be busy
+// max_threads moved to include/scaling.hpp
 constexpr int max_threads {80};
+constexpr double W_max_A {0.3};
+constexpr double W_max_B {0.2};
+constexpr size_t PERCENTILE_WINDOW {200};
+
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
 
@@ -24,7 +32,7 @@ void rate_updater(std::atomic<int>& send_rate) {
     std::string new_rate;
     int rate {};
     while (true) {
-        std::cout << "Insert a new send rate (in ms): \n";
+        std::cout << "\nInsert a new send rate (in ms): \n";
         std::cin >> new_rate; 
         std::cout << '\n';
         try {
@@ -38,98 +46,110 @@ void rate_updater(std::atomic<int>& send_rate) {
             std::cout << "Out of range number" << e.what();
             continue;
         }
-        std::cout << '\n';
         send_rate.store(rate); 
         std::cout << send_rate.load();
     }
 }
 
-struct QueueState {
-    double lambda {0.0}; // Items/s to arrive
-    double W_ema {0.0}; // End-to-end latency for a single worker
-    double mu_ema {0.0}; // Items/s to exit
-    double sum_W {0.0}; // Sum for warmup
-    double sum_mu {0.0}; // Sum for warmup
-    int warmup_count {0}; // Checks how many items used for warmup
-    int above_threshold_count {0};
-    int below_threshold_count {0};
-    int K {5}; // Number of times W can go below/above its threshold, used to avoid updates made by outliers
-    int threads {0}; // Thread present in a worker node
-    double L_estimated {0.0}; // Estimated queue length via Little's Law: lambda * (W - 1/mu)
-};
+#include "scaling.hpp"
 
-// Update thread count
-void thread_update(update_type type, const char* worker_topic, int inc_value, zmq::socket_t& update_socket) {
-    update_ms cmd {type, inc_value};
-    update_socket.send(zmq_str(worker_topic), zmq::send_flags::sndmore);
-    update_socket.send(zmq::message_t(&cmd, sizeof(update_ms)), zmq::send_flags::none);
-}
-// Update EMA estimates and apply scaling policy on each new item latency
-void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
-    Metrics::instance().observe_item_latency(lat);
-
-    // Warmup stem, aproximating W, lambda and mu with the first n items
+void process_worker_latency_common(
+    const item_latency& lat,
+    QueueState& qs,
+    const char* worker,
+    double observed_latency,
+    double service_time,
+    LatencyHistogram& hist,
+    double W_max,
+    zmq::socket_t& orchestrator)
+{
+    // warmup + metrics
     if (qs.warmup_count < WARMUP_ITEMS) {
-        if (worker == topics::WORKERA) {
-            qs.sum_W  += lat.sender_to_A;
-            qs.sum_mu += 1.0 / lat.service_time_A;
-        }
-        else {
-            qs.sum_W  += lat.A_to_B;
-            qs.sum_mu += 1.0 / lat.service_time_B;
-        }
-        qs.warmup_count++;
+        qs.sum_W += observed_latency;
+        qs.sum_mu += 1.0 / service_time;
+        qs.worker_latencys.push_back(observed_latency);
 
-        // When warmup finished starts to calculate approximations
+        qs.warmup_count++;
         if (qs.warmup_count == WARMUP_ITEMS) {
-            qs.W_ema  = qs.sum_W  / WARMUP_ITEMS;
+            qs.W_ema = qs.sum_W / WARMUP_ITEMS;
             qs.mu_ema = qs.sum_mu / WARMUP_ITEMS;
             Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, 0.0, worker);
-
             LOG_INFO("main", "Warmup complete: lambda=" + std::to_string(qs.lambda) +
                      " mu=" + std::to_string(qs.mu_ema) +
                      " W=" + std::to_string(qs.W_ema));
         }
+        return;
+    }
+
+    // EMA updates
+    qs.W_ema = alpha * observed_latency + (1.0 - alpha) * qs.W_ema;
+    qs.mu_ema = alpha * (1.0 / service_time) + (1.0 - alpha) * qs.mu_ema;
+
+    
+    // sliding window population
+    qs.worker_latencys.push_back(observed_latency);
+    if (qs.worker_latencys.size() > PERCENTILE_WINDOW)
+        qs.worker_latencys.erase(qs.worker_latencys.begin());
+     
+    auto now = std::chrono::steady_clock::now();
+    // Wait some ms to recalculate scaling 
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < 300) {
+        return;
+    }
+    if (qs.pending_thread_update) {
+        return;
+    }
+    // compute p99 from window
+    double p99_window = 0.0;
+    std::vector<double> tmp;
+    tmp = qs.worker_latencys; // copies; reuses capacity if possible
+
+    if (!tmp.empty()) {
+        size_t idx = static_cast<size_t>(std::ceil(0.99 * tmp.size()));
+        if (idx == 0) idx = 1;
+        idx = idx - 1; 
+        std::nth_element(tmp.begin(), tmp.begin() + idx, tmp.end());
+        p99_window = tmp[idx];
+    }
+
+    bool W_max_surpassed = p99_window > W_max;
+
+
+    qs.L_estimated = static_cast<int>(std::ceil(qs.lambda * (qs.W_ema - 1.0 / qs.mu_ema)));
+    Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, qs.L_estimated, worker);
+
+    if (qs.lambda <= 0.0) return;
+    int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
+
+    // c_min based scale decision
+    check_update_condition(qs, worker, orchestrator,
+                           qs.threads < c_min, qs.threads > c_min,
+                           c_min - qs.threads, 5,
+                           qs.above_threshold_count, qs.below_threshold_count, max_threads);
+
+    if (!realistic_latency_check(qs, W_max)) return;
+    
+    // p99 based scale decision
+    check_update_condition(qs, worker, orchestrator,
+                           p99_window > W_max, p99_window < 0.8 * W_max,
+                           1, 5,
+                           qs.above_W_target_count, qs.below_W_target_count, max_threads);
+}
+
+// Nuova handle_item_latency che delega
+void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
+    Metrics::instance().observe_item_latency(lat);
+
+    if (worker == topics::WORKERA) {
+        process_worker_latency_common(
+            lat, qs, worker, lat.sender_to_A, lat.service_time_A,
+            Metrics::instance().latency_A_to_B, W_max_A, orchestrator
+        );
     } else {
-        // EMA update
-        if (worker == topics::WORKERA) {
-            qs.W_ema  = alpha * lat.sender_to_A + (1.0 - alpha) * qs.W_ema;
-            qs.mu_ema = alpha * (1.0 / lat.service_time_A) + (1.0 - alpha) * qs.mu_ema;
-        } else {
-            qs.W_ema  = alpha * lat.A_to_B + (1.0 - alpha) * qs.W_ema;
-            qs.mu_ema = alpha * (1.0 / lat.service_time_B) + (1.0 - alpha) * qs.mu_ema;
-        }
-        qs.L_estimated = static_cast<int>(std::ceil(qs.lambda * (qs.W_ema - 1.0 / qs.mu_ema)));
-
-        Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, qs.L_estimated, worker);
-        
-
-        if (qs.lambda <= 0.0) return;
-        // Update c_min -> minimun number of thread to keep the system stable, using p_target to make the system not barely holding on
-        int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
-
-        if (qs.threads < c_min) {
-            qs.above_threshold_count++;
-            qs.below_threshold_count = 0;
-            if (qs.above_threshold_count >= qs.K) {
-                thread_update(update_type::THREAD_INC, worker, c_min - qs.threads, orchestrator);
-                qs.above_threshold_count = 0;
-                // threads updated when worker confirms via router
-            }
-        }
-        else if (qs.threads > c_min) {
-            qs.below_threshold_count++;
-            qs.above_threshold_count = 0;
-            if (qs.below_threshold_count >= qs.K) {
-                thread_update(update_type::THREAD_DEC, worker, 1, orchestrator);
-                qs.below_threshold_count = 0;
-                // threads updated when worker confirms via router
-            }
-        }
-        else {
-            qs.above_threshold_count = 0;
-            qs.below_threshold_count = 0;
-        }
+        process_worker_latency_common(
+            lat, qs, worker, lat.A_to_B, lat.service_time_B,
+            Metrics::instance().latency_B_to_sink, W_max_B, orchestrator
+        );
     }
 }
 
@@ -138,6 +158,7 @@ void thread_update_recv(const std::string& tag_str, const char* worker, const zm
     int sign {(tag_str == msg_types::THREAD_INC) ? 1 : -1};
     Metrics::instance().inc_worker_threads(sign * val, worker);
     qs.threads += sign * val;
+    qs.pending_thread_update = false;
 }
 
 // Exiting on error function

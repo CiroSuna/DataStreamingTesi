@@ -6,16 +6,18 @@
 #include <unordered_map>
 
 struct LatencyHistogram {
-    std::string name;
-    std::string help;
-    std::vector<double> bounds;
-    std::vector<long long> bucket_counts;
-    double sum{0.0};
-    long long count{0};
-
-    LatencyHistogram(const std::string& name, const std::string& help);
-    void observe(double seconds);
-    std::string serialize() const;
+    private:
+        std::string name;
+        std::string help;
+        std::vector<double> bounds;
+        std::vector<long long> bucket_counts;
+        double sum{0.0};
+        long long count{0};
+    public:
+        LatencyHistogram(const std::string& name, const std::string& help);
+        void observe(double seconds);
+        std::string serialize() const;
+        double get_percentile(double p);
 };
 
 struct WorkerState {
@@ -34,11 +36,13 @@ public:
     void observe_item_latency(const item_latency& lat);
     void set_queue_state(double lambda, double mu, double W, int L, const char* worker);
     std::string get_metrics();
-private:
-    Metrics();
-    std::unordered_map<std::string, WorkerState> workers_info;
     LatencyHistogram latency_sender_to_A;
     LatencyHistogram latency_A_to_B;
     LatencyHistogram latency_B_to_sink;
     LatencyHistogram latency_end_to_end;
+    std::unordered_map<std::string, LatencyHistogram> latencies;
+private:
+    Metrics();
+    std::unordered_map<std::string, WorkerState> workers_info;
+    
 };

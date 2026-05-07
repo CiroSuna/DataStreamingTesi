@@ -13,7 +13,6 @@ class ThreadPool {
     private:
         std::vector<std::thread> thrd_list;
         std::queue<std::function<void()>> task_queue;
-        int active_threads;
         int destroy_count;
         bool stop;
         std::mutex pool_mtx;
@@ -43,6 +42,7 @@ class ThreadPool {
 
         void add_n_threads(int n);
         void destroy_n_threads(int n);
+        int active_threads;
 };
 
 #endif
