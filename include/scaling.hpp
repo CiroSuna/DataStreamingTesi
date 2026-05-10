@@ -15,6 +15,8 @@ struct QueueState {
     int below_threshold_count {0};
     int above_W_target_count {0};
     int below_W_target_count {0};
+    int above_W50_target_count {0};
+    int below_W50_target_count {0};
     int K {5};
     int threads {0};
     std::chrono::steady_clock::time_point last_scale_time {};

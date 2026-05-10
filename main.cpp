@@ -21,8 +21,10 @@ constexpr double alpha {0.1};
 constexpr double p_target {0.7}; // Percentage at which i want te system to be busy
 // max_threads moved to include/scaling.hpp
 constexpr int max_threads {80};
-constexpr double W_max_A {0.3};
-constexpr double W_max_B {0.2};
+constexpr double W_max_A_p99 {1.2};
+constexpr double W_max_B_p99 {0.35};
+constexpr double W_max_A_p50 {0.35};
+constexpr double W_max_B_p50 {0.2};
 constexpr size_t PERCENTILE_WINDOW {200};
 
 // Flag to tell when to shutdown pipe
@@ -60,7 +62,8 @@ void process_worker_latency_common(
     double observed_latency,
     double service_time,
     LatencyHistogram& hist,
-    double W_max,
+    double W_max_p99,
+    double W_max_p50,
     zmq::socket_t& orchestrator)
 {
     // warmup + metrics
@@ -93,7 +96,7 @@ void process_worker_latency_common(
      
     auto now = std::chrono::steady_clock::now();
     // Wait some ms to recalculate scaling 
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < 300) {
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < 100) {
         return;
     }
     if (qs.pending_thread_update) {
@@ -101,6 +104,7 @@ void process_worker_latency_common(
     }
     // compute p99 from window
     double p99_window = 0.0;
+    double p50_window = 0.0;
     std::vector<double> tmp;
     tmp = qs.worker_latencys; // copies; reuses capacity if possible
 
@@ -111,8 +115,15 @@ void process_worker_latency_common(
         std::nth_element(tmp.begin(), tmp.begin() + idx, tmp.end());
         p99_window = tmp[idx];
     }
+    tmp = qs.worker_latencys;
 
-    bool W_max_surpassed = p99_window > W_max;
+    if (!tmp.empty()) {
+        size_t idx = static_cast<size_t>(std::ceil(0.50 * tmp.size()));
+        if (idx == 0) idx = 1;
+        idx = idx - 1;
+        std::nth_element(tmp.begin(), tmp.begin() + idx, tmp.end());
+        p50_window = tmp[idx];
+    }
 
 
     qs.L_estimated = static_cast<int>(std::ceil(qs.lambda * (qs.W_ema - 1.0 / qs.mu_ema)));
@@ -122,19 +133,27 @@ void process_worker_latency_common(
     int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
 
     // c_min based scale decision
+    
     check_update_condition(qs, worker, orchestrator,
                            qs.threads < c_min, qs.threads > c_min,
                            c_min - qs.threads, 5,
                            qs.above_threshold_count, qs.below_threshold_count, max_threads);
+                           
+    if (!realistic_latency_check(qs, W_max_p99)) return;
 
-    if (!realistic_latency_check(qs, W_max)) return;
-    
+    // p50 based scale decision
+    check_update_condition(qs, worker, orchestrator,
+                           p50_window > W_max_p50, p50_window < 0.8 * W_max_p50,
+                           1, 2,
+                           qs.above_W50_target_count, qs.below_W50_target_count, max_threads);
+
     // p99 based scale decision
     check_update_condition(qs, worker, orchestrator,
-                           p99_window > W_max, p99_window < 0.8 * W_max,
+                           p99_window > W_max_p99, p99_window < 0.8 * W_max_p99,
                            1, 5,
                            qs.above_W_target_count, qs.below_W_target_count, max_threads);
 }
+
 
 // Nuova handle_item_latency che delega
 void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
@@ -143,12 +162,12 @@ void handle_item_latency(const item_latency& lat, QueueState& qs, const char* wo
     if (worker == topics::WORKERA) {
         process_worker_latency_common(
             lat, qs, worker, lat.sender_to_A, lat.service_time_A,
-            Metrics::instance().latency_A_to_B, W_max_A, orchestrator
+            Metrics::instance().latency_A_to_B, W_max_A_p99, W_max_A_p50, orchestrator
         );
     } else {
         process_worker_latency_common(
             lat, qs, worker, lat.A_to_B, lat.service_time_B,
-            Metrics::instance().latency_B_to_sink, W_max_B, orchestrator
+            Metrics::instance().latency_B_to_sink, W_max_B_p99, W_max_B_p50, orchestrator
         );
     }
 }
@@ -259,12 +278,6 @@ int main(void){
         metrics_exposer.listen("0.0.0.0", 8080);
     });
 
-    pid_t p_child[PIPE_LENGTH] {
-        process_starter("workerA"),
-        process_starter("workerB"),
-        process_starter("sink"),
-        process_starter("sender")
-    };
 
    
     // Starting contex
@@ -282,6 +295,13 @@ int main(void){
     catch (const zmq::error_t& e) {
         fatal(std::string("orchestrator: ") + e.what());
     }
+
+    pid_t p_child[PIPE_LENGTH] {
+        process_starter("workerA"),
+        process_starter("workerB"),
+        process_starter("sink"),
+        process_starter("sender")
+    };
 
     // Sync 
     LOG_INFO("main", "Starting to wait for READY messages...");

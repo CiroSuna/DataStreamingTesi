@@ -21,6 +21,7 @@ int main() {
     
     std::string routing_id {topics::SENDER};
     
+    LOG_INFO("sender", "Sender sta iniziando eseczione");
     try {
         orchestrator_sub.connect(ipc_paths::orchestrator());
         send_to_A.connect(ipc_paths::sender_to_workerA());
