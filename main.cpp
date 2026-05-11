@@ -12,6 +12,7 @@
 #include "utils.hpp"
 #include "logger.hpp"
 #include "metrics.hpp"
+#include "scaling.hpp"
 #include "httplib.h"
 
 
@@ -53,7 +54,6 @@ void rate_updater(std::atomic<int>& send_rate) {
     }
 }
 
-#include "scaling.hpp"
 
 void process_worker_latency_common(
     const item_latency& lat,
