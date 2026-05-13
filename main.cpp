@@ -6,8 +6,6 @@
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
-#include <mutex>
-#include "threadPool.hpp"
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
@@ -22,10 +20,10 @@ constexpr double alpha {0.1};
 constexpr double p_target {0.7}; // Percentage at which i want te system to be busy
 // max_threads moved to include/scaling.hpp
 constexpr int max_threads {80};
-constexpr double W_max_A_p99 {1.2};
-constexpr double W_max_B_p99 {0.35};
-constexpr double W_max_A_p50 {0.35};
-constexpr double W_max_B_p50 {0.2};
+constexpr double W_max_A_p99 {0.35};
+constexpr double W_max_B_p99 {1.2};
+constexpr double W_max_A_p50 {0.2};
+constexpr double W_max_B_p50 {0.35};
 constexpr size_t PERCENTILE_WINDOW {200};
 
 // Flag to tell when to shutdown pipe
@@ -146,7 +144,7 @@ void process_worker_latency_common(
                            p50_window > W_max_p50, p50_window < 0.8 * W_max_p50,
                            1, 2,
                            qs.above_W50_target_count, qs.below_W50_target_count, max_threads);
-
+    
     // p99 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p99_window > W_max_p99, p99_window < 0.8 * W_max_p99,
@@ -419,6 +417,6 @@ int main(void){
     rate_updater_thread.join();
     metrics_exposer.stop();
     metrics_thread.join();
-
+    
     return 0;
 }

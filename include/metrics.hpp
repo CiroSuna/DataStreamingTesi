@@ -1,6 +1,6 @@
 #pragma once
+#include <mutex>
 #include <string>
-#include <atomic>
 #include <vector>
 #include "dataTypes.hpp"
 #include <unordered_map>
@@ -44,5 +44,5 @@ public:
 private:
     Metrics();
     std::unordered_map<std::string, WorkerState> workers_info;
-    
+    std::mutex mutex;
 };

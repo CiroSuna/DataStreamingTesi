@@ -101,7 +101,7 @@ int main() {
                     LOG_DEBUG("workerB", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
                     // Sleep for
                     int64_t t_start = std::chrono::steady_clock::now().time_since_epoch().count();
-                    int sleep_ms = (dist(rng) < 0.9) ? 50: 200;
+                    int sleep_ms = (dist(rng) < 0.9) ? 200 : 800;
 
                     std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
                     data processed {d};

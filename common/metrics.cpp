@@ -1,5 +1,6 @@
 #include "metrics.hpp"
 #include "dataTypes.hpp"
+#include <mutex>
 #include <sstream>
 
 LatencyHistogram::LatencyHistogram(const std::string& n, const std::string& h)
@@ -63,11 +64,13 @@ Metrics& Metrics::instance() {
 }
 
 void Metrics::inc_worker_threads(int inc_value, const char* worker) {
+    std::lock_guard<std::mutex> lock(mutex);
     workers_info[worker].threads += inc_value;
 }
 
 // Update histogram with new latencys
 void Metrics::observe_item_latency(const item_latency& lat) {
+    std::lock_guard<std::mutex> lock(mutex);
     latency_sender_to_A.observe(lat.sender_to_A);
     latency_A_to_B.observe(lat.A_to_B);
     latency_B_to_sink.observe(lat.B_to_sink);
@@ -75,6 +78,7 @@ void Metrics::observe_item_latency(const item_latency& lat) {
 }
 
 void Metrics::set_queue_state(double lambda, double mu, double W, int L, const char * worker) {
+    std::lock_guard<std::mutex> lock(mutex);
     workers_info[worker].lambda = lambda;
     workers_info[worker].mu = mu;
     workers_info[worker].W = W;
@@ -84,7 +88,7 @@ void Metrics::set_queue_state(double lambda, double mu, double W, int L, const c
 
 std::string Metrics::get_metrics() {
     std::ostringstream oss;
-
+    std::lock_guard<std::mutex> lock(mutex);
     // Aux function to format metrics for all workers
     auto emit_gauge = [&](const std::string& name, const std::string& help, auto getter) {
         oss << "# HELP " << name << " " << help << "\n";

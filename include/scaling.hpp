@@ -3,6 +3,7 @@
 #include <vector>
 #include <chrono>
 #include <zmq.hpp>
+#include "dataTypes.hpp"
 
 struct QueueState {
     double lambda {0.0};
@@ -27,7 +28,6 @@ struct QueueState {
 };
 
 // Forward-declare update_type and update_ms from dataTypes.hpp
-#include "dataTypes.hpp"
 
 bool thread_update(update_type type, QueueState& qs, const char* worker_topic, int inc_value, zmq::socket_t& update_socket, const int max_threads);
 bool realistic_latency_check(QueueState& qs, double W_max);
