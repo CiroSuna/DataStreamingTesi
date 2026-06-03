@@ -106,9 +106,7 @@ int main() {
                     tid_ss << std::this_thread::get_id();
                     LOG_DEBUG("workerA", "Thread " + tid_ss.str() + " processing value: " + std::to_string(d.curr_value));
                     int64_t t_start = std::chrono::steady_clock::now().time_since_epoch().count();
-                    // 90% task normali, 10% task pesanti
-                    int sleep_ms = (dist(rng) < 0.9) ? 50 : 200;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(sleep_ms));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
                     data processed {d};
                     processed.curr_value += fib(processed.original_value % 30);

@@ -12,13 +12,7 @@ struct QueueState {
     double sum_W {0.0};
     double sum_mu {0.0};
     int warmup_count {0};
-    int above_threshold_count {0};
-    int below_threshold_count {0};
-    int above_W_target_count {0};
-    int below_W_target_count {0};
-    int above_W50_target_count {0};
-    int below_W50_target_count {0};
-    int K {5};
+
     int threads {0};
     std::chrono::steady_clock::time_point last_scale_time {};
     double L_estimated {0.0};
@@ -39,6 +33,4 @@ bool check_update_condition(
     bool scaledown_cond,
     int scaleup_delta,
     int scaledown_delta,
-    int& above_counter,
-    int& below_counter,
     const int max_threads);

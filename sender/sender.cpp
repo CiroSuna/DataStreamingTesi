@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <thread>
 #include <chrono>
+#include <cmath>
 #include <zmq.hpp>
 #include <unistd.h>
 #include <random>
@@ -41,9 +42,13 @@ int main() {
     }
 
     zmq::pollitem_t items[] = {
-        { orchestrator_sub, 0, ZMQ_POLLIN,  0 },
-        { send_to_A,        0, ZMQ_POLLOUT, 0 }
+        { orchestrator_sub, 0, ZMQ_POLLIN, 0 },
+        { send_to_A, 0, ZMQ_POLLOUT, 0 }
     };
+
+    constexpr double base_rate_ms {6.0};   // mean inter-arrival base (ms) -> ~200 items/s
+    constexpr double amplitude_ms {4.0};   // swing: [2ms, 8ms] -> [~500, ~125] items/s
+    constexpr double period_s {15.0};  // one full wave every 20s (3 waves in 60s)
 
     int curr_value {10};
     int send_rate {5};
@@ -51,7 +56,8 @@ int main() {
     int64_t now {0};
     int64_t inter_arrival {0};
     std::mt19937 rand {std::random_device{}()};
-    std::exponential_distribution<double> dist {1.0 / send_rate};
+    std::exponential_distribution<double> dist {1.0 / base_rate_ms};
+    auto start_time = std::chrono::steady_clock::now();
 
     try {
         while (true) {
@@ -108,8 +114,16 @@ int main() {
                     send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
                     LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
 
+                    // Sinusoidal rate update
+                    double elapsed_s = std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - start_time).count();
+                    double current_rate_ms = base_rate_ms
+                        + amplitude_ms * std::sin(2.0 * M_PI * elapsed_s / period_s);
+                    if (current_rate_ms < 1.0) current_rate_ms = 1.0;
+                    dist.param(std::exponential_distribution<double>::param_type(1.0 / current_rate_ms));
+
                     double wait_ms = dist(rand);
-                    if (wait_ms < 1.0) wait_ms = 1.0; // if wait_ms is too mutch colose to 0
+                    if (wait_ms < 1.0) wait_ms = 1.0;
                     std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(std::round(wait_ms))));
                 }
             }

@@ -42,7 +42,7 @@ int main() {
     LOG_INFO("sink", "Synchronized and ready");
 
     int recived_data {0};
-    constexpr int expected_data {50000};
+    constexpr int expected_data {12000};
 
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },

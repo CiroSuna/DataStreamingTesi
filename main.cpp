@@ -17,14 +17,16 @@
 constexpr int PIPE_LENGTH {4};
 constexpr int WARMUP_ITEMS {20};
 constexpr double alpha {0.1};
-constexpr double p_target {0.7}; // Percentage at which i want te system to be busy
-// max_threads moved to include/scaling.hpp
+constexpr double p_target {0.7};          // target utilization per worker
 constexpr int max_threads {80};
-constexpr double W_max_A_p99 {0.35};
-constexpr double W_max_B_p99 {1.2};
-constexpr double W_max_A_p50 {0.2};
-constexpr double W_max_B_p50 {0.35};
-constexpr size_t PERCENTILE_WINDOW {200};
+// WorkerA service_time=20ms -> c_min=6, W_min=0.020s
+constexpr double W_max_A_p99 {0.06};      // 3x service time A
+constexpr double W_max_A_p50 {0.035};     // 1.75x service time A
+// WorkerB service_time=50ms -> c_min=15, W_min=0.050s
+constexpr double W_max_B_p99 {0.15};      // 3x service time B
+constexpr double W_max_B_p50 {0.08};      // 1.6x service time B
+constexpr size_t PERCENTILE_WINDOW {200}; // ~1s of data at 200 items/s
+constexpr int pause_time {500};
 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
@@ -93,8 +95,8 @@ void process_worker_latency_common(
         qs.worker_latencys.erase(qs.worker_latencys.begin());
      
     auto now = std::chrono::steady_clock::now();
-    // Wait some ms to recalculate scaling 
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < 100) {
+    // Wait 300ms before re-evaluating scaling
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < pause_time) {
         return;
     }
     if (qs.pending_thread_update) {
@@ -134,22 +136,19 @@ void process_worker_latency_common(
     
     check_update_condition(qs, worker, orchestrator,
                            qs.threads < c_min, qs.threads > c_min,
-                           c_min - qs.threads, 5,
-                           qs.above_threshold_count, qs.below_threshold_count, max_threads);
+                           c_min - qs.threads, 5, max_threads);
                            
     if (!realistic_latency_check(qs, W_max_p99)) return;
 
     // p50 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p50_window > W_max_p50, p50_window < 0.8 * W_max_p50,
-                           1, 2,
-                           qs.above_W50_target_count, qs.below_W50_target_count, max_threads);
+                           1, 2, max_threads);
     
     // p99 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p99_window > W_max_p99, p99_window < 0.8 * W_max_p99,
-                           1, 5,
-                           qs.above_W_target_count, qs.below_W_target_count, max_threads);
+                           1, 5, max_threads);
 }
 
 
@@ -250,6 +249,16 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
 
 int main(void){
 
+    // Create file for latencys
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    char ts_buf[32];
+    std::strftime(ts_buf, sizeof(ts_buf), "%Y%m%d_%H%M%S", std::localtime(&t));
+    std::string csv_path = std::string(LOG_DIR) + "/run_" + ts_buf + ".csv";
+    std::ofstream csv_file(csv_path);
+    // scrivi header
+    csv_file << "send_time_ns,exit_time_ns,sender_to_A_s,service_time_A_s,"
+                "A_to_B_s,service_time_B_s,B_to_sink_s,end_to_end_s,threads_A,threads_B,lambda\n";
     // Variables for calculating system stability and little formula
     QueueState qsA {};
     QueueState qsB {};
@@ -383,6 +392,14 @@ int main(void){
                             memcpy(&lat, payload.data(), sizeof(item_latency));
                             handle_item_latency(lat, qsA, topics::WORKERA, orchestrator);
                             handle_item_latency(lat, qsB, topics::WORKERB, orchestrator);
+
+                            csv_file << lat.send_time << ","
+                                << (lat.send_time + static_cast<int64_t>(lat.end_to_end * 1e9)) << ","
+                                << lat.sender_to_A << "," << lat.service_time_A << ","
+                                << lat.A_to_B << "," << lat.service_time_B << ","
+                                << lat.B_to_sink << "," << lat.end_to_end << ","
+                                << qsA.threads << "," << qsB.threads << ","
+                                << qsA.lambda << '\n';
                         }
                         break;
                     }

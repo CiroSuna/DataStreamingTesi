@@ -55,33 +55,15 @@ bool check_update_condition(
     bool scaledown_cond,
     int scaleup_delta,
     int scaledown_delta,
-    int& above_counter,
-    int& below_counter,
     const int max_threads)
 {
     if (qs.pending_thread_update) return false;
 
-    if (scaleup_cond) {
-        below_counter = 0;
-        if (++above_counter >= qs.K) {
-            thread_update(update_type::THREAD_INC, qs, worker_topic, scaleup_delta, orchestrator, max_threads);
-            above_counter = 0;
-            return true;
-        }
-        return false;
-    }
+    if (scaleup_cond)
+        return thread_update(update_type::THREAD_INC, qs, worker_topic, scaleup_delta, orchestrator, max_threads);
 
-    if (scaledown_cond) {
-        above_counter = 0;
-        if (++below_counter >= qs.K) {
-            thread_update(update_type::THREAD_DEC, qs, worker_topic, scaledown_delta, orchestrator, max_threads);
-            below_counter = 0;
-            return true;
-        }
-        return false;
-    }
+    if (scaledown_cond)
+        return thread_update(update_type::THREAD_DEC, qs, worker_topic, scaledown_delta, orchestrator, max_threads);
 
-    above_counter = 0;
-    below_counter = 0;
     return false;
 }

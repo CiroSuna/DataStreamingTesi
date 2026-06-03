@@ -7,4 +7,6 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 .vscode/
+plots/
+__pycache__/
 README.md
