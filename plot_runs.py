@@ -35,6 +35,11 @@ THREAD_A_COL    = "#55A868"
 THREAD_B_COL    = "#C44E52"
 LAMBDA_COL      = "#8172B2"
 LAMBDA_SMOOTH_W = 30   # finestra rolling per smorzare il rumore dell'EMA lambda
+E2E_COL         = "#4C72B0"
+QUEUE_A_COL     = "#2A9D8F"
+QUEUE_B_COL     = "#E76F51"
+E2E_SMOOTH_W    = 50   # finestra rolling per latenza e2e
+DEFAULT_BIN_S   = 1.0  # secondi per aggregazione robusta cross-run
 
 
 RUN_GAP_S = 0.0  # nessun gap: tutte le run concatenate come un'unica serie
@@ -46,6 +51,7 @@ def load_all(csv_paths: list[Path]) -> pd.DataFrame:
     t_offset = 0.0
     for p in csv_paths:
         df = pd.read_csv(p)
+        df["run_id"] = p.stem
         df["send_time_s"] = df["send_time_ns"] * 1e-9
         df["exit_time_s"] = df["exit_time_ns"] * 1e-9
         t0 = df["send_time_s"].iloc[0]
@@ -55,6 +61,30 @@ def load_all(csv_paths: list[Path]) -> pd.DataFrame:
         t_offset += df["t_send_rel"].max() + RUN_GAP_S
         frames.append(df)
     return pd.concat(frames, ignore_index=True)
+
+
+def aggregate_cross_run(df: pd.DataFrame, value_col: str, bin_s: float) -> pd.DataFrame:
+    """Aggrega una metrica nel tempo in modo robusto tra run.
+
+    1) mediana per run per bin temporale
+    2) p25/p50/p75 tra run per ogni bin (run pesate uguali)
+    """
+    base = df[["run_id", "t_send_rel", value_col]].dropna().copy()
+    if base.empty:
+        return pd.DataFrame(columns=["t", "p25", "p50", "p75"])
+
+    base["t_bin"] = (base["t_send_rel"] / bin_s).astype(int)
+    per_run = (
+        base.groupby(["run_id", "t_bin"], as_index=False)[value_col]
+        .median()
+        .rename(columns={value_col: "run_med"})
+    )
+
+    q = per_run.groupby("t_bin")["run_med"].quantile([0.25, 0.5, 0.75]).unstack()
+    q.columns = ["p25", "p50", "p75"]
+    q = q.reset_index()
+    q["t"] = (q["t_bin"] + 0.5) * bin_s
+    return q[["t", "p25", "p50", "p75"]]
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -74,7 +104,7 @@ def plot_inter_stage_boxplot(df: pd.DataFrame, out_dir: Path):
     for ax, (stage_name, col) in zip(axes, inter_cols.items()):
         data = [df[col].dropna().values * 1e3]   # ms, lista con un elemento
         # outlier come puntini piccoli (dati reali di accodamento sotto carico)
-        bp = ax.boxplot(data, labels=[stage_name], patch_artist=True,
+        bp = ax.boxplot(data, tick_labels=[stage_name], patch_artist=True,
                         medianprops=dict(color="black", linewidth=1.5),
                         flierprops=dict(marker=".", markersize=2,
                                         markerfacecolor=INTER_COLOR, alpha=0.3),
@@ -111,7 +141,7 @@ def plot_intra_stage_boxplot(df: pd.DataFrame, out_dir: Path):
 
     for ax, (stage_name, col) in zip(axes, intra_cols.items()):
         data = [df[col].dropna().values * 1e3]   # ms
-        bp = ax.boxplot(data, labels=[stage_name], patch_artist=True,
+        bp = ax.boxplot(data, tick_labels=[stage_name], patch_artist=True,
                         medianprops=dict(color="black", linewidth=1.5),
                         flierprops=dict(marker=".", markersize=2,
                                         markerfacecolor=INTRA_COLOR, alpha=0.3),
@@ -134,34 +164,34 @@ def plot_intra_stage_boxplot(df: pd.DataFrame, out_dir: Path):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Plot 3 – Thread count (step) + λ smoothed (line)  –  tutte le run
-#           sull'asse globale, con linee verticali di separazione tra run
+# Plot 3 – Thread count (step) + λ smoothed (line)
 # ════════════════════════════════════════════════════════════════════════════
-def plot_threads_lambda(df: pd.DataFrame, out_dir: Path):
+def plot_threads_lambda(df: pd.DataFrame, out_dir: Path, bin_s: float):
     fig, ax1 = plt.subplots(figsize=(14, 5))
     ax2 = ax1.twinx()
 
-    t = df["t_global"].values
+    agg_a = aggregate_cross_run(df, "threads_A", bin_s)
+    agg_b = aggregate_cross_run(df, "threads_B", bin_s)
+    agg_l = aggregate_cross_run(df, "lambda", bin_s)
 
-    # thread count: step plot (valori discreti)
-    ax1.step(t, df["threads_A"].values, where="post",
-             color=THREAD_A_COL, linewidth=1.6, label="Thread A")
-    ax1.step(t, df["threads_B"].values, where="post",
-             color=THREAD_B_COL, linewidth=1.6, label="Thread B", linestyle="--")
+    # thread count robusto: mediana + banda IQR
+    ax1.step(agg_a["t"], agg_a["p50"], where="mid",
+             color=THREAD_A_COL, linewidth=1.6, label="Thread A (p50)")
+    ax1.fill_between(agg_a["t"], agg_a["p25"], agg_a["p75"],
+                     color=THREAD_A_COL, alpha=0.15)
+    ax1.step(agg_b["t"], agg_b["p50"], where="mid",
+             color=THREAD_B_COL, linewidth=1.6, linestyle="--", label="Thread B (p50)")
+    ax1.fill_between(agg_b["t"], agg_b["p25"], agg_b["p75"],
+                     color=THREAD_B_COL, alpha=0.12)
     ax1.set_ylabel("Numero di repliche (thread)")
-    ax1.set_xlabel("Tempo globale (s)")
+    ax1.set_xlabel("Tempo relativo nella run (s)")
     ax1.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
-    # λ: smoothing globale con rolling mean
-    lambda_smooth = (
-        pd.Series(df["lambda"].values)
-        .rolling(window=LAMBDA_SMOOTH_W, center=True, min_periods=1)
-        .mean()
-        .values
-    )
-
-    ax2.plot(t, lambda_smooth, color=LAMBDA_COL,
-             linewidth=1.4, alpha=0.9, label="λ (smoothed)")
+    # lambda robusta: mediana + banda IQR
+    ax2.plot(agg_l["t"], agg_l["p50"], color=LAMBDA_COL,
+             linewidth=1.5, alpha=0.95, label="λ (p50)")
+    ax2.fill_between(agg_l["t"], agg_l["p25"], agg_l["p75"],
+                     color=LAMBDA_COL, alpha=0.15)
     ax2.set_ylabel("Tasso di arrivo λ (items/s)")
 
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -169,7 +199,7 @@ def plot_threads_lambda(df: pd.DataFrame, out_dir: Path):
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
 
     ax1.grid(axis="y", linestyle="--", alpha=0.4)
-    fig.suptitle("Thread count e carico in arrivo", fontsize=12)
+    fig.suptitle("Thread count e carico in arrivo (mediana + IQR tra run)", fontsize=12)
     fig.tight_layout()
 
     out = out_dir / "03_threads_lambda.pdf"
@@ -179,35 +209,44 @@ def plot_threads_lambda(df: pd.DataFrame, out_dir: Path):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Plot 4 – E2E scatter: x = t_send_rel, y = t_exit_rel
-#           Colore = latenza E2E (ms); diagonale y=x come riferimento
+# Plot 4 – Latenza E2E nel tempo (stile simile al plot 3)
 # ════════════════════════════════════════════════════════════════════════════
-def plot_e2e_scatter(df: pd.DataFrame, out_dir: Path):
-    fig, ax = plt.subplots(figsize=(12, 6))
+def plot_e2e_latency(df: pd.DataFrame, out_dir: Path, bin_s: float):
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    ax2 = ax1.twinx()
 
-    e2e_ms = df["end_to_end_s"].values * 1e3
-    sc = ax.scatter(
-        df["t_global"].values,
-        df["t_global"].values + df["end_to_end_s"].values,
-        c=e2e_ms, cmap="plasma", s=4, alpha=0.7,
-        vmin=np.percentile(e2e_ms, 2), vmax=np.percentile(e2e_ms, 98)
-    )
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label("Latenza E2E (ms)")
+    agg_e2e = aggregate_cross_run(df, "end_to_end_s", bin_s)
+    ax1.plot(agg_e2e["t"], agg_e2e["p50"], color=E2E_COL,
+             linewidth=1.8, alpha=0.95, label="E2E (p50)")
+    ax1.fill_between(agg_e2e["t"], agg_e2e["p25"], agg_e2e["p75"],
+                     color=E2E_COL, alpha=0.16)
 
-    # linea di riferimento y = x (latenza zero)
-    t = df["t_global"].values
-    ax.plot([t.min(), t.max()], [t.min(), t.max()],
-            color="gray", linewidth=0.8, linestyle="--", label="y = x (latency=0)")
-    ax.legend(fontsize=8)
+    # code nello stesso grafico (asse secondario) se presenti nel CSV
+    if {"queue_len_A", "queue_len_B"}.issubset(df.columns):
+        agg_qa = aggregate_cross_run(df, "queue_len_A", bin_s)
+        agg_qb = aggregate_cross_run(df, "queue_len_B", bin_s)
+        ax2.step(agg_qa["t"], agg_qa["p50"], where="mid",
+                 color=QUEUE_A_COL, linewidth=1.2, alpha=0.9, label="Queue A (p50)")
+        ax2.fill_between(agg_qa["t"], agg_qa["p25"], agg_qa["p75"],
+                         color=QUEUE_A_COL, alpha=0.12)
+        ax2.step(agg_qb["t"], agg_qb["p50"], where="mid",
+                 color=QUEUE_B_COL, linewidth=1.2, linestyle="--", alpha=0.9, label="Queue B (p50)")
+        ax2.fill_between(agg_qb["t"], agg_qb["p25"], agg_qb["p75"],
+                         color=QUEUE_B_COL, alpha=0.1)
+        ax2.set_ylabel("Lunghezza coda stimata (items)")
+        ax2.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
-    ax.set_xlabel("Tempo di invio (s)")
-    ax.set_ylabel("Tempo di uscita dalla pipeline (s)")
-    ax.set_title("E2E: tempo di invio vs tempo di uscita", fontsize=12)
-    ax.grid(linestyle="--", alpha=0.3)
+    ax1.set_xlabel("Tempo relativo nella run (s)")
+    ax1.set_ylabel("Latenza E2E (s)")
+    ax1.set_title("Latenza E2E + lunghezza code (mediana + IQR tra run)", fontsize=12)
+    ax1.grid(linestyle="--", alpha=0.35)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
     fig.tight_layout()
 
-    out = out_dir / "04_e2e_scatter.pdf"
+    out = out_dir / "04_e2e_latency.pdf"
     fig.savefig(out, bbox_inches="tight")
     plt.close(fig)
     print(f"  Salvato: {out}")
@@ -222,6 +261,8 @@ def main():
                         help="Cartella con i CSV delle run (default: ./logs)")
     parser.add_argument("--out-dir", default="./plots",
                         help="Cartella di output per i PDF (default: ./plots)")
+    parser.add_argument("--bin-s", type=float, default=DEFAULT_BIN_S,
+                        help="Ampiezza bin temporale in secondi per aggregazione cross-run")
     parser.add_argument("csvfiles", nargs="*",
                         help="File CSV specifici (sovrascrive --log-dir)")
     args = parser.parse_args()
@@ -250,8 +291,8 @@ def main():
     print(f"\nGenero plot in {out_dir} ...")
     plot_inter_stage_boxplot(df, out_dir)
     plot_intra_stage_boxplot(df, out_dir)
-    plot_threads_lambda(df, out_dir)
-    plot_e2e_scatter(df, out_dir)
+    plot_threads_lambda(df, out_dir, args.bin_s)
+    plot_e2e_latency(df, out_dir, args.bin_s)
 
     print("\nDone.")
 

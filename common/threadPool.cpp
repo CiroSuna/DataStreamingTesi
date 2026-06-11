@@ -35,7 +35,6 @@ std::function<void()> ThreadPool::fetch_task_unlocked() {
     task_queue.pop();
     return task;
 }
-// TODO: RIGUARDA QUESTO
 // Destroy threads implementation
 void ThreadPool::destroy_n_threads(int n) {
     std::unique_lock<std::mutex> lock(pool_mtx);

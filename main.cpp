@@ -258,7 +258,8 @@ int main(void){
     std::ofstream csv_file(csv_path);
     // scrivi header
     csv_file << "send_time_ns,exit_time_ns,sender_to_A_s,service_time_A_s,"
-                "A_to_B_s,service_time_B_s,B_to_sink_s,end_to_end_s,threads_A,threads_B,lambda\n";
+                "A_to_B_s,service_time_B_s,B_to_sink_s,end_to_end_s,threads_A,threads_B,lambda,"
+                "queue_len_A,queue_len_B\n";
     // Variables for calculating system stability and little formula
     QueueState qsA {};
     QueueState qsB {};
@@ -399,7 +400,8 @@ int main(void){
                                 << lat.A_to_B << "," << lat.service_time_B << ","
                                 << lat.B_to_sink << "," << lat.end_to_end << ","
                                 << qsA.threads << "," << qsB.threads << ","
-                                << qsA.lambda << '\n';
+                                << qsA.lambda << ","
+                                << qsA.L_estimated << "," << qsB.L_estimated << '\n';
                         }
                         break;
                     }
