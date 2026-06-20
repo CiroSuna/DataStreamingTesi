@@ -61,11 +61,10 @@ void process_worker_latency_common(
     const char* worker,
     double observed_latency,
     double service_time,
-    LatencyHistogram& hist,
     double W_max_p99,
     double W_max_p50,
-    zmq::socket_t& orchestrator)
-{
+    zmq::socket_t& orchestrator
+) {
     // warmup + metrics
     if (qs.warmup_count < WARMUP_ITEMS) {
         qs.sum_W += observed_latency;
@@ -152,19 +151,18 @@ void process_worker_latency_common(
 }
 
 
-// Nuova handle_item_latency che delega
 void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
     Metrics::instance().observe_item_latency(lat);
 
     if (worker == topics::WORKERA) {
         process_worker_latency_common(
             lat, qs, worker, lat.sender_to_A, lat.service_time_A,
-            Metrics::instance().latency_A_to_B, W_max_A_p99, W_max_A_p50, orchestrator
+            W_max_A_p99, W_max_A_p50, orchestrator
         );
     } else {
         process_worker_latency_common(
             lat, qs, worker, lat.A_to_B, lat.service_time_B,
-            Metrics::instance().latency_B_to_sink, W_max_B_p99, W_max_B_p50, orchestrator
+            W_max_B_p99, W_max_B_p50, orchestrator
         );
     }
 }

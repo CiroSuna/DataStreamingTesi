@@ -39,6 +39,7 @@ E2E_COL         = "#4C72B0"
 QUEUE_A_COL     = "#2A9D8F"
 QUEUE_B_COL     = "#E76F51"
 E2E_SMOOTH_W    = 50   # finestra rolling per latenza e2e
+THPUT_COL       = "#8B7355"
 DEFAULT_BIN_S   = 1.0  # secondi per aggregazione robusta cross-run
 
 
@@ -61,6 +62,18 @@ def load_all(csv_paths: list[Path]) -> pd.DataFrame:
         t_offset += df["t_send_rel"].max() + RUN_GAP_S
         frames.append(df)
     return pd.concat(frames, ignore_index=True)
+
+
+def compute_throughput_per_run(df: pd.DataFrame, bin_s: float) -> pd.DataFrame:
+    """Calcola throughput per bin per ogni run da t_exit_rel."""
+    base = df[["run_id", "t_exit_rel"]].copy()
+    base["t_bin"] = (base["t_exit_rel"] / bin_s).astype(int)
+    per_run = (
+        base.groupby(["run_id", "t_bin"], as_index=False).size()
+        .rename(columns={"size": "count"})
+    )
+    per_run["throughput"] = per_run["count"] / bin_s
+    return per_run[["run_id", "t_bin", "throughput"]]
 
 
 def aggregate_cross_run(df: pd.DataFrame, value_col: str, bin_s: float) -> pd.DataFrame:
@@ -253,6 +266,43 @@ def plot_e2e_latency(df: pd.DataFrame, out_dir: Path, bin_s: float):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Plot 5 – Throughput nel tempo (aggregato tra run)
+# ════════════════════════════════════════════════════════════════════════════
+def plot_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    tput_per_run = compute_throughput_per_run(df, bin_s)
+    if tput_per_run.empty:
+        print("  Skipping throughput plot: no data")
+        return
+
+    q = (
+        tput_per_run.groupby("t_bin")["throughput"]
+        .quantile([0.25, 0.5, 0.75])
+        .unstack()
+    )
+    q.columns = ["p25", "p50", "p75"]
+    q = q.reset_index()
+    q["t"] = (q["t_bin"] + 0.5) * bin_s
+
+    ax.plot(q["t"], q["p50"], color=THPUT_COL, linewidth=1.8, alpha=0.95, label="Throughput (p50)")
+    ax.fill_between(q["t"], q["p25"], q["p75"],
+                    color=THPUT_COL, alpha=0.15)
+
+    ax.set_xlabel("Tempo relativo nella run (s)")
+    ax.set_ylabel("Throughput in uscita (items/s)")
+    ax.set_title("Throughput nel tempo (mediana + IQR tra run)", fontsize=12)
+    ax.grid(linestyle="--", alpha=0.35)
+    ax.legend(loc="upper right", fontsize=9)
+    fig.tight_layout()
+
+    out = out_dir / "05_throughput.pdf"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Salvato: {out}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # main
 # ════════════════════════════════════════════════════════════════════════════
 def main():
@@ -293,6 +343,7 @@ def main():
     plot_intra_stage_boxplot(df, out_dir)
     plot_threads_lambda(df, out_dir, args.bin_s)
     plot_e2e_latency(df, out_dir, args.bin_s)
+    plot_throughput(df, out_dir, args.bin_s)
 
     print("\nDone.")
 

@@ -13,7 +13,7 @@ bool thread_update(update_type type, QueueState& qs, const char* worker_topic, i
     if (type == update_type::THREAD_INC) {
         int room = max_threads - qs.threads;
         if (room <= 0) {
-            LOG_INFO("main", "reached max number of thread");
+            LOG_DEBUG("main", "reached max number of thread");
             return false;
         }
         delta = std::min(delta, room);
@@ -58,12 +58,20 @@ bool check_update_condition(
     const int max_threads)
 {
     if (qs.pending_thread_update) return false;
+    update_type type {};
+    int delta = 0;
 
-    if (scaleup_cond)
-        return thread_update(update_type::THREAD_INC, qs, worker_topic, scaleup_delta, orchestrator, max_threads);
+    if (scaleup_cond) {
+        type = update_type::THREAD_INC;
+        delta = scaleup_delta;
+    } else if (scaledown_cond) {
+        type = update_type::THREAD_DEC;
+        delta = scaledown_delta;
+    } else {
+        return false;
+    }
 
-    if (scaledown_cond)
-        return thread_update(update_type::THREAD_DEC, qs, worker_topic, scaledown_delta, orchestrator, max_threads);
+    return thread_update(type, qs, worker_topic, delta, orchestrator, max_threads);
 
     return false;
 }

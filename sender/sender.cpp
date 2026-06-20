@@ -96,7 +96,6 @@ int main() {
 
             if (items[1].revents & ZMQ_POLLOUT) {
 
-
                 for (size_t i {0}; i < 100; i++) {
                     data d{curr_value++};
                     

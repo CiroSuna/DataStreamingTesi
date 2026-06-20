@@ -48,14 +48,38 @@ std::string LatencyHistogram::serialize() const {
     return oss.str();
 }
 
-Metrics::Metrics()
-    : latency_sender_to_A{"pipeline_latency_sender_to_workerA_seconds", "Latency from sender to workerA per item"},
-      latency_A_to_B{"pipeline_latency_workerA_to_workerB_seconds", "Latency from workerA to workerB per item"},
-      latency_B_to_sink{"pipeline_latency_workerB_to_sink_seconds", "Latency from workerB to sink per item"},
-      latency_end_to_end{"pipeline_latency_end_to_end_seconds", "End-to-end latency per item through the pipeline"}
-{
+Metrics::Metrics() {
     workers_info[topics::WORKERA].label = "A";
     workers_info[topics::WORKERB].label = "B";
+
+    latencies.emplace(
+        "sender_to_A",
+        LatencyHistogram{
+            "pipeline_latency_sender_to_workerA_seconds",
+            "Latency from sender to workerA per item"
+        }
+    );
+    latencies.emplace(
+        "A_to_B",
+        LatencyHistogram{
+            "pipeline_latency_workerA_to_workerB_seconds",
+            "Latency from workerA to workerB per item"
+        }
+    );
+    latencies.emplace(
+        "B_to_sink",
+        LatencyHistogram{
+            "pipeline_latency_workerB_to_sink_seconds",
+            "Latency from workerB to sink per item"
+        }
+    );
+    latencies.emplace(
+        "end_to_end",
+        LatencyHistogram{
+            "pipeline_latency_end_to_end_seconds",
+            "End-to-end latency per item through the pipeline"
+        }
+    );
 }
 
 Metrics& Metrics::instance() {
@@ -71,10 +95,10 @@ void Metrics::inc_worker_threads(int inc_value, const char* worker) {
 // Update histogram with new latencys
 void Metrics::observe_item_latency(const item_latency& lat) {
     std::lock_guard<std::mutex> lock(mutex);
-    latency_sender_to_A.observe(lat.sender_to_A);
-    latency_A_to_B.observe(lat.A_to_B);
-    latency_B_to_sink.observe(lat.B_to_sink);
-    latency_end_to_end.observe(lat.end_to_end);
+    latencies.at("sender_to_A").observe(lat.sender_to_A);
+    latencies.at("A_to_B").observe(lat.A_to_B);
+    latencies.at("B_to_sink").observe(lat.B_to_sink);
+    latencies.at("end_to_end").observe(lat.end_to_end);
 }
 
 void Metrics::set_queue_state(double lambda, double mu, double W, int L, const char * worker) {
@@ -103,10 +127,9 @@ std::string Metrics::get_metrics() {
     emit_gauge("qs_W", "EMA sojourn time W (seconds)", [](const WorkerState& ws){ return ws.W; });
     emit_gauge("qs_L", "Estimated queue length via Little's Law",[](const WorkerState& ws){ return ws.L; });
 
-    oss << latency_sender_to_A.serialize();
-    oss << latency_A_to_B.serialize();
-    oss << latency_B_to_sink.serialize();
-    oss << latency_end_to_end.serialize();
+    for (const auto& [name, histogram] : latencies) {
+        oss << histogram.serialize();
+    }
     return oss.str();
 }
 
