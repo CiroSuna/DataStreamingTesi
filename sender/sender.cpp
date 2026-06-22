@@ -46,18 +46,20 @@ int main() {
         { send_to_A, 0, ZMQ_POLLOUT, 0 }
     };
 
-    constexpr double base_rate_ms {6.0};   // mean inter-arrival base (ms) -> ~200 items/s
-    constexpr double amplitude_ms {4.0};   // swing: [2ms, 8ms] -> [~500, ~125] items/s
+    constexpr double base_rate_ms {2.2};   // mean inter-arrival base (ms) -> ~200 items/s
+    constexpr double amplitude_ms {0.5};   // swing: [2ms, 8ms] -> [~500, ~125] items/s
     constexpr double period_s {15.0};  // one full wave every 20s (3 waves in 60s)
+    constexpr double run_duration_s {70.0};
 
     int curr_value {10};
-    int send_rate {5};
     int64_t last_send_time {0};
     int64_t now {0};
     int64_t inter_arrival {0};
     std::mt19937 rand {std::random_device{}()};
     std::exponential_distribution<double> dist {1.0 / base_rate_ms};
     auto start_time = std::chrono::steady_clock::now();
+    bool generation_done_notified {false};
+    bool generating {true};
 
     try {
         while (true) {
@@ -86,7 +88,6 @@ int main() {
                     if (value > 0) {
                         dist.param(std::exponential_distribution<double>::param_type(1.0 / value));
                     }
-                    send_rate = value;
                 }
 
                 if (msg_type_str == messages::SHUTDOWN) {
@@ -94,37 +95,45 @@ int main() {
                 }
             }
 
-            if (items[1].revents & ZMQ_POLLOUT) {
-
-                for (size_t i {0}; i < 100; i++) {
-                    data d{curr_value++};
-                    
-                    now = std::chrono::steady_clock::now().time_since_epoch().count();                    
-                    if (last_send_time > 0.0) {
-                        inter_arrival = now - last_send_time;
-                    }
-                    last_send_time = now;
-                    // Send to orchestrator lambda update
-                    if (inter_arrival > 0) {
-                        orchestrator_dealer.send(zmq_str(msg_types::LAMBDA_UPDATE), zmq::send_flags::sndmore);
-                        orchestrator_dealer.send(zmq::buffer(std::to_string(inter_arrival)), zmq::send_flags::none);
-                    }
-                    d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
-                    send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
-                    LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
-
-                    // Sinusoidal rate update
-                    double elapsed_s = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - start_time).count();
-                    double current_rate_ms = base_rate_ms
-                        + amplitude_ms * std::sin(2.0 * M_PI * elapsed_s / period_s);
-                    if (current_rate_ms < 1.0) current_rate_ms = 1.0;
-                    dist.param(std::exponential_distribution<double>::param_type(1.0 / current_rate_ms));
-
-                    double wait_ms = dist(rand);
-                    if (wait_ms < 1.0) wait_ms = 1.0;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(std::round(wait_ms))));
+            double elapsed_s = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - start_time).count();
+            if (generating && elapsed_s >= run_duration_s) {
+                generating = false;
+                if (!generation_done_notified) {
+                    orchestrator_dealer.send(zmq_str(msg_types::SENDER_DONE), zmq::send_flags::sndmore);
+                    orchestrator_dealer.send(zmq_str("1"), zmq::send_flags::none);
+                    generation_done_notified = true;
+                    LOG_INFO("sender", "Run timer reached, sender stopped generating new items");
                 }
+            }
+
+            if (generating && (items[1].revents & ZMQ_POLLOUT)) {
+
+                data d{curr_value++};
+
+                now = std::chrono::steady_clock::now().time_since_epoch().count();
+                if (last_send_time > 0.0) {
+                    inter_arrival = now - last_send_time;
+                }
+                last_send_time = now;
+                // Send to orchestrator lambda update
+                if (inter_arrival > 0) {
+                    orchestrator_dealer.send(zmq_str(msg_types::LAMBDA_UPDATE), zmq::send_flags::sndmore);
+                    orchestrator_dealer.send(zmq::buffer(std::to_string(inter_arrival)), zmq::send_flags::none);
+                }
+                d.send_time = std::chrono::steady_clock::now().time_since_epoch().count();
+                send_to_A.send(zmq::message_t(&d, sizeof(data)), zmq::send_flags::none);
+                LOG_DEBUG("sender", "dato mandato verso A: " + std::to_string(d.curr_value));
+
+                // Sinusoidal rate update
+                double current_rate_ms = base_rate_ms
+                    + amplitude_ms * std::sin(2.0 * M_PI * elapsed_s / period_s);
+                if (current_rate_ms < 1.0) current_rate_ms = 1.0;
+                dist.param(std::exponential_distribution<double>::param_type(1.0 / current_rate_ms));
+
+                double wait_ms = dist(rand);
+                if (wait_ms < 1.0) wait_ms = 1.0;
+                std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(std::round(wait_ms))));
             }
         }
     }

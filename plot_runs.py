@@ -1,3 +1,4 @@
+# Plot 3 – Thread count (step) + λ smoothed (line)
 #!/usr/bin/env python3
 """
 plot_runs.py  –  Genera i plot delle run dalla pipeline C++.
@@ -52,15 +53,34 @@ def load_all(csv_paths: list[Path]) -> pd.DataFrame:
     t_offset = 0.0
     for p in csv_paths:
         df = pd.read_csv(p)
+        # Scarta righe corrotte/incomplete (es. ultima riga tronca dopo stop brusco)
+        # che possono causare exit_time << send_time e rompere l'asse temporale.
+        valid_mask = (
+            df["send_time_ns"].notna()
+            & df["exit_time_ns"].notna()
+            & (df["send_time_ns"] > 0)
+            & (df["exit_time_ns"] >= df["send_time_ns"])
+        )
+        dropped = int((~valid_mask).sum())
+        if dropped:
+            print(f"  [warn] {p.name}: scartate {dropped} righe invalide")
+        df = df.loc[valid_mask].copy()
+        if df.empty:
+            print(f"  [warn] {p.name}: nessuna riga valida, file ignorato")
+            continue
+
         df["run_id"] = p.stem
         df["send_time_s"] = df["send_time_ns"] * 1e-9
         df["exit_time_s"] = df["exit_time_ns"] * 1e-9
-        t0 = df["send_time_s"].iloc[0]
+        t0 = df["send_time_s"].min()
         df["t_send_rel"] = df["send_time_s"] - t0
         df["t_exit_rel"] = df["exit_time_s"] - t0
         df["t_global"]   = df["t_send_rel"] + t_offset
         t_offset += df["t_send_rel"].max() + RUN_GAP_S
         frames.append(df)
+
+    if not frames:
+        return pd.DataFrame()
     return pd.concat(frames, ignore_index=True)
 
 
@@ -74,6 +94,18 @@ def compute_throughput_per_run(df: pd.DataFrame, bin_s: float) -> pd.DataFrame:
     )
     per_run["throughput"] = per_run["count"] / bin_s
     return per_run[["run_id", "t_bin", "throughput"]]
+
+
+def compute_input_rate_per_run(df: pd.DataFrame, bin_s: float) -> pd.DataFrame:
+    """Calcola arrival rate effettivo per bin per ogni run da t_send_rel."""
+    base = df[["run_id", "t_send_rel"]].copy()
+    base["t_bin"] = (base["t_send_rel"] / bin_s).astype(int)
+    per_run = (
+        base.groupby(["run_id", "t_bin"], as_index=False).size()
+        .rename(columns={"size": "count"})
+    )
+    per_run["input_rate"] = per_run["count"] / bin_s
+    return per_run[["run_id", "t_bin", "input_rate"]]
 
 
 def aggregate_cross_run(df: pd.DataFrame, value_col: str, bin_s: float) -> pd.DataFrame:
@@ -177,7 +209,7 @@ def plot_intra_stage_boxplot(df: pd.DataFrame, out_dir: Path):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# Plot 3 – Thread count (step) + λ smoothed (line)
+# Plot 3 – Thread count (step) + arrival rate effettivo (line)
 # ════════════════════════════════════════════════════════════════════════════
 def plot_threads_lambda(df: pd.DataFrame, out_dir: Path, bin_s: float):
     fig, ax1 = plt.subplots(figsize=(14, 5))
@@ -185,7 +217,16 @@ def plot_threads_lambda(df: pd.DataFrame, out_dir: Path, bin_s: float):
 
     agg_a = aggregate_cross_run(df, "threads_A", bin_s)
     agg_b = aggregate_cross_run(df, "threads_B", bin_s)
-    agg_l = aggregate_cross_run(df, "lambda", bin_s)
+    agg_in = compute_input_rate_per_run(df, bin_s)
+
+    q_in = (
+        agg_in.groupby("t_bin")["input_rate"]
+        .quantile([0.25, 0.5, 0.75])
+        .unstack()
+    )
+    q_in.columns = ["p25", "p50", "p75"]
+    q_in = q_in.reset_index()
+    q_in["t"] = (q_in["t_bin"] + 0.5) * bin_s
 
     # thread count robusto: mediana + banda IQR
     ax1.step(agg_a["t"], agg_a["p50"], where="mid",
@@ -193,26 +234,26 @@ def plot_threads_lambda(df: pd.DataFrame, out_dir: Path, bin_s: float):
     ax1.fill_between(agg_a["t"], agg_a["p25"], agg_a["p75"],
                      color=THREAD_A_COL, alpha=0.15)
     ax1.step(agg_b["t"], agg_b["p50"], where="mid",
-             color=THREAD_B_COL, linewidth=1.6, linestyle="--", label="Thread B (p50)")
+             color=THREAD_B_COL, linewidth=1.6, label="Thread B (p50)")
     ax1.fill_between(agg_b["t"], agg_b["p25"], agg_b["p75"],
                      color=THREAD_B_COL, alpha=0.12)
     ax1.set_ylabel("Numero di repliche (thread)")
     ax1.set_xlabel("Tempo relativo nella run (s)")
     ax1.yaxis.set_major_locator(mticker.MaxNLocator(integer=True))
 
-    # lambda robusta: mediana + banda IQR
-    ax2.plot(agg_l["t"], agg_l["p50"], color=LAMBDA_COL,
-             linewidth=1.5, alpha=0.95, label="λ (p50)")
-    ax2.fill_between(agg_l["t"], agg_l["p25"], agg_l["p75"],
+    # arrival rate effettivo: mediana + banda IQR
+    ax2.plot(q_in["t"], q_in["p50"], color=LAMBDA_COL,
+             linewidth=1.5, alpha=0.95, label="Arrival rate (p50)")
+    ax2.fill_between(q_in["t"], q_in["p25"], q_in["p75"],
                      color=LAMBDA_COL, alpha=0.15)
-    ax2.set_ylabel("Tasso di arrivo λ (items/s)")
+    ax2.set_ylabel("Arrival rate effettivo (items/s)")
 
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
     ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
 
     ax1.grid(axis="y", linestyle="--", alpha=0.4)
-    fig.suptitle("Thread count e carico in arrivo (mediana + IQR tra run)", fontsize=12)
+    fig.suptitle("Thread count e arrival rate effettivo (mediana + IQR tra run)", fontsize=12)
     fig.tight_layout()
 
     out = out_dir / "03_threads_lambda.pdf"
@@ -243,7 +284,7 @@ def plot_e2e_latency(df: pd.DataFrame, out_dir: Path, bin_s: float):
         ax2.fill_between(agg_qa["t"], agg_qa["p25"], agg_qa["p75"],
                          color=QUEUE_A_COL, alpha=0.12)
         ax2.step(agg_qb["t"], agg_qb["p50"], where="mid",
-                 color=QUEUE_B_COL, linewidth=1.2, linestyle="--", alpha=0.9, label="Queue B (p50)")
+                 color=QUEUE_B_COL, linewidth=1.2, alpha=0.9, label="Queue B (p50)")
         ax2.fill_between(agg_qb["t"], agg_qb["p25"], agg_qb["p75"],
                          color=QUEUE_B_COL, alpha=0.1)
         ax2.set_ylabel("Lunghezza coda stimata (items)")
@@ -303,6 +344,60 @@ def plot_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Plot 6 – Arrival effettivo vs Throughput effettivo vs λ EMA
+# ════════════════════════════════════════════════════════════════════════════
+def plot_arrival_vs_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
+    fig, ax = plt.subplots(figsize=(14, 5))
+
+    in_per_run = compute_input_rate_per_run(df, bin_s)
+    out_per_run = compute_throughput_per_run(df, bin_s)
+
+    if in_per_run.empty or out_per_run.empty:
+        print("  Skipping arrival-vs-throughput plot: no data")
+        return
+
+    q_in = (
+        in_per_run.groupby("t_bin")["input_rate"]
+        .quantile([0.25, 0.5, 0.75])
+        .unstack()
+        .reset_index()
+    )
+    q_in.columns = ["t_bin", "p25", "p50", "p75"]
+    q_in["t"] = (q_in["t_bin"] + 0.5) * bin_s
+
+    q_out = (
+        out_per_run.groupby("t_bin")["throughput"]
+        .quantile([0.25, 0.5, 0.75])
+        .unstack()
+        .reset_index()
+    )
+    q_out.columns = ["t_bin", "p25", "p50", "p75"]
+    q_out["t"] = (q_out["t_bin"] + 0.5) * bin_s
+
+    in_col = "#1F77B4"
+    out_col = "#2CA02C"
+
+    ax.plot(q_in["t"], q_in["p50"], color=in_col, linewidth=1.7, label="Arrival effettivo (p50)")
+    ax.fill_between(q_in["t"], q_in["p25"], q_in["p75"], color=in_col, alpha=0.14)
+
+    ax.plot(q_out["t"], q_out["p50"], color=out_col, linewidth=1.9, label="Throughput effettivo (p50)")
+    ax.fill_between(q_out["t"], q_out["p25"], q_out["p75"], color=out_col, alpha=0.14)
+
+
+    ax.set_xlabel("Tempo relativo nella run (s)")
+    ax.set_ylabel("Rate (items/s)")
+    ax.set_title("Arrival vs Throughput (effettivi)", fontsize=12)
+    ax.grid(linestyle="--", alpha=0.35)
+    ax.legend(loc="upper right", fontsize=9)
+    fig.tight_layout()
+
+    out = out_dir / "06_arrival_vs_throughput.pdf"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Salvato: {out}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # main
 # ════════════════════════════════════════════════════════════════════════════
 def main():
@@ -344,6 +439,7 @@ def main():
     plot_threads_lambda(df, out_dir, args.bin_s)
     plot_e2e_latency(df, out_dir, args.bin_s)
     plot_throughput(df, out_dir, args.bin_s)
+    plot_arrival_vs_throughput(df, out_dir, args.bin_s)
 
     print("\nDone.")
 

@@ -18,7 +18,7 @@ constexpr int PIPE_LENGTH {4};
 constexpr int WARMUP_ITEMS {20};
 constexpr double alpha {0.1};
 constexpr double p_target {0.7};          // target utilization per worker
-constexpr int max_threads {80};
+constexpr int max_threads {20};
 // WorkerA service_time=20ms -> c_min=6, W_min=0.020s
 constexpr double W_max_A_p99 {0.06};      // 3x service time A
 constexpr double W_max_A_p50 {0.035};     // 1.75x service time A
@@ -322,6 +322,11 @@ int main(void){
         {sync_socket, 0, ZMQ_POLLIN, 0},
         {router, 0, ZMQ_POLLIN, 0}
     };
+
+    bool sender_done {false};
+    bool shutdown_sent {false};
+    auto last_sink_latency_time = std::chrono::steady_clock::now();
+    constexpr auto DRAIN_QUIET_TIME = std::chrono::seconds(2);
     
     try {
         // Poll loop
@@ -383,10 +388,14 @@ int main(void){
                             // Choose to use lambda_a or throughput, using min because throuput_A can be theorical and be higher than lambda 
                             double lambda_B_instant = std::min(qsA.lambda, throughput_A); 
                             qsB.lambda = alpha * lambda_B_instant + (1.0 - alpha) * qsB.lambda;
+                        } else if (tag_str == msg_types::SENDER_DONE) {
+                            sender_done = true;
+                            LOG_INFO("main", "Sender reported end of generation, waiting for pipeline drain");
                         }
                         break;
                     case ProcessId::SINK: {
                         if (tag_str == msg_types::ITEM_LATENCY) {
+                            last_sink_latency_time = std::chrono::steady_clock::now();
                             item_latency lat {};
                             memcpy(&lat, payload.data(), sizeof(item_latency));
                             handle_item_latency(lat, qsA, topics::WORKERA, orchestrator);
@@ -415,6 +424,16 @@ int main(void){
                 orchestrator.send(zmq_str(msg_types::RATE_UPDATE), zmq::send_flags::sndmore);
                 orchestrator.send(zmq::buffer(std::to_string(curr_rate)), zmq::send_flags::none);
             }
+
+            if (sender_done && !shutdown_sent) {
+                auto now_steady = std::chrono::steady_clock::now();
+                if (now_steady - last_sink_latency_time >= DRAIN_QUIET_TIME) {
+                    orchestrator.send(zmq_str(topics::GLOBAL), zmq::send_flags::sndmore);
+                    orchestrator.send(zmq_str(messages::SHUTDOWN), zmq::send_flags::none);
+                    shutdown_sent = true;
+                    LOG_INFO("main", "Drain period completed, SHUTDOWN broadcast sent");
+                }
+            }
         } 
         
     }
@@ -422,8 +441,10 @@ int main(void){
         fatal(std::string("Error waiting for sink END message: ") + e.what());
     }
 
-    orchestrator.send(zmq_str(topics::GLOBAL), zmq::send_flags::sndmore);
-    orchestrator.send(zmq_str(messages::SHUTDOWN), zmq::send_flags::none);
+    if (!shutdown_sent) {
+        orchestrator.send(zmq_str(topics::GLOBAL), zmq::send_flags::sndmore);
+        orchestrator.send(zmq_str(messages::SHUTDOWN), zmq::send_flags::none);
+    }
     
     // Wait for all children to finish before closing sockets
     // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored

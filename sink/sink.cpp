@@ -41,9 +41,6 @@ int main() {
 
     LOG_INFO("sink", "Synchronized and ready");
 
-    int recived_data {0};
-    constexpr int expected_data {12000};
-
     zmq::pollitem_t items[] = {
         { recv_from_workerB, 0, ZMQ_POLLIN, 0 },
         { orchestrator_sub,  0, ZMQ_POLLIN, 0 }
@@ -86,15 +83,6 @@ int main() {
                     orchestrator_dealer.send(zmq_str(msg_types::ITEM_LATENCY), zmq::send_flags::sndmore);
                     orchestrator_dealer.send(zmq::message_t{&lat, sizeof(item_latency)}, zmq::send_flags::none);
                 }
-
-
-                if (++recived_data >= expected_data){
-                    // Notify orchestrator and wait for ack
-                    sync_socket.send(zmq_str(messages::END), zmq::send_flags::none);
-                    zmq::message_t ack;
-                    (void)sync_socket.recv(ack, zmq::recv_flags::none);
-                    break;
-                }
             }
 
             if (items[1].revents & ZMQ_POLLIN) {
@@ -109,6 +97,10 @@ int main() {
 
                 std::string r {static_cast<char*>(msg.data()), msg.size()};
                 if (r == messages::SHUTDOWN) {
+                    // Notify orchestrator and wait for ack before shutdown.
+                    sync_socket.send(zmq_str(messages::END), zmq::send_flags::none);
+                    zmq::message_t ack;
+                    (void)sync_socket.recv(ack, zmq::recv_flags::none);
                     break;
                 }
             }
