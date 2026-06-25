@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include <filesystem>
 #include <zmq.hpp>
 #include <unistd.h>
 #include <vector>
@@ -11,22 +12,11 @@
 #include "logger.hpp"
 #include "metrics.hpp"
 #include "scaling.hpp"
+#include "config.hpp"
 #include "httplib.h"
 
 
 constexpr int PIPE_LENGTH {4};
-constexpr int WARMUP_ITEMS {20};
-constexpr double alpha {0.1};
-constexpr double p_target {0.7};          // target utilization per worker
-constexpr int max_threads {20};
-// WorkerA service_time=20ms -> c_min=6, W_min=0.020s
-constexpr double W_max_A_p99 {0.06};      // 3x service time A
-constexpr double W_max_A_p50 {0.035};     // 1.75x service time A
-// WorkerB service_time=50ms -> c_min=15, W_min=0.050s
-constexpr double W_max_B_p99 {0.15};      // 3x service time B
-constexpr double W_max_B_p50 {0.08};      // 1.6x service time B
-constexpr size_t PERCENTILE_WINDOW {200}; // ~1s of data at 200 items/s
-constexpr int pause_time {500};
 
 // Flag to tell when to shutdown pipe
 std::atomic<bool> end_pipe {false};
@@ -36,7 +26,7 @@ void rate_updater(std::atomic<int>& send_rate) {
     int rate {};
     while (true) {
         std::cout << "\nInsert a new send rate (in ms): \n";
-        std::cin >> new_rate; 
+        std::cin >> new_rate;
         std::cout << '\n';
         try {
             rate = std::stoi(new_rate);
@@ -49,7 +39,7 @@ void rate_updater(std::atomic<int>& send_rate) {
             std::cout << "Out of range number" << e.what();
             continue;
         }
-        send_rate.store(rate); 
+        send_rate.store(rate);
         std::cout << send_rate.load();
     }
 }
@@ -63,18 +53,19 @@ void process_worker_latency_common(
     double service_time,
     double W_max_p99,
     double W_max_p50,
-    zmq::socket_t& orchestrator
+    zmq::socket_t& orchestrator,
+    const Config& cfg
 ) {
     // warmup + metrics
-    if (qs.warmup_count < WARMUP_ITEMS) {
+    if (qs.warmup_count < cfg.warmup_items) {
         qs.sum_W += observed_latency;
         qs.sum_mu += 1.0 / service_time;
         qs.worker_latencys.push_back(observed_latency);
 
         qs.warmup_count++;
-        if (qs.warmup_count == WARMUP_ITEMS) {
-            qs.W_ema = qs.sum_W / WARMUP_ITEMS;
-            qs.mu_ema = qs.sum_mu / WARMUP_ITEMS;
+        if (qs.warmup_count == cfg.warmup_items) {
+            qs.W_ema = qs.sum_W / cfg.warmup_items;
+            qs.mu_ema = qs.sum_mu / cfg.warmup_items;
             Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, 0.0, worker);
             LOG_INFO("main", "Warmup complete: lambda=" + std::to_string(qs.lambda) +
                      " mu=" + std::to_string(qs.mu_ema) +
@@ -84,18 +75,18 @@ void process_worker_latency_common(
     }
 
     // EMA updates
-    qs.W_ema = alpha * observed_latency + (1.0 - alpha) * qs.W_ema;
-    qs.mu_ema = alpha * (1.0 / service_time) + (1.0 - alpha) * qs.mu_ema;
+    qs.W_ema = cfg.alpha * observed_latency + (1.0 - cfg.alpha) * qs.W_ema;
+    qs.mu_ema = cfg.alpha * (1.0 / service_time) + (1.0 - cfg.alpha) * qs.mu_ema;
 
-    
+
     // sliding window population
     qs.worker_latencys.push_back(observed_latency);
-    if (qs.worker_latencys.size() > PERCENTILE_WINDOW)
+    if (static_cast<int>(qs.worker_latencys.size()) > cfg.percentile_window)
         qs.worker_latencys.erase(qs.worker_latencys.begin());
-     
+
     auto now = std::chrono::steady_clock::now();
-    // Wait 300ms before re-evaluating scaling
-    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < pause_time) {
+    // Wait pause_time_ms before re-evaluating scaling
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - qs.last_scale_time).count() < cfg.pause_time_ms) {
         return;
     }
     if (qs.pending_thread_update) {
@@ -110,7 +101,7 @@ void process_worker_latency_common(
     if (!tmp.empty()) {
         size_t idx = static_cast<size_t>(std::ceil(0.99 * tmp.size()));
         if (idx == 0) idx = 1;
-        idx = idx - 1; 
+        idx = idx - 1;
         std::nth_element(tmp.begin(), tmp.begin() + idx, tmp.end());
         p99_window = tmp[idx];
     }
@@ -129,40 +120,39 @@ void process_worker_latency_common(
     Metrics::instance().set_queue_state(qs.lambda, qs.mu_ema, qs.W_ema, qs.L_estimated, worker);
 
     if (qs.lambda <= 0.0) return;
-    int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * p_target)));
+    int c_min = static_cast<int>(std::ceil(qs.lambda / (qs.mu_ema * cfg.p_target)));
 
     // c_min based scale decision
-    
     check_update_condition(qs, worker, orchestrator,
                            qs.threads < c_min, qs.threads > c_min,
-                           c_min - qs.threads, 5, max_threads);
-                           
+                           c_min - qs.threads, 5, cfg.max_threads);
+
     if (!realistic_latency_check(qs, W_max_p99)) return;
 
     // p50 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p50_window > W_max_p50, p50_window < 0.8 * W_max_p50,
-                           1, 2, max_threads);
-    
+                           1, 2, cfg.max_threads);
+
     // p99 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p99_window > W_max_p99, p99_window < 0.8 * W_max_p99,
-                           1, 5, max_threads);
+                           1, 5, cfg.max_threads);
 }
 
 
-void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator) {
+void handle_item_latency(const item_latency& lat, QueueState& qs, const char* worker, zmq::socket_t& orchestrator, const Config& cfg) {
     Metrics::instance().observe_item_latency(lat);
 
     if (worker == topics::WORKERA) {
         process_worker_latency_common(
             lat, qs, worker, lat.sender_to_A, lat.service_time_A,
-            W_max_A_p99, W_max_A_p50, orchestrator
+            cfg.W_max_A_p99, cfg.W_max_A_p50, orchestrator, cfg
         );
     } else {
         process_worker_latency_common(
             lat, qs, worker, lat.A_to_B, lat.service_time_B,
-            W_max_B_p99, W_max_B_p50, orchestrator
+            cfg.W_max_B_p99, cfg.W_max_B_p50, orchestrator, cfg
         );
     }
 }
@@ -186,18 +176,23 @@ void thread_update_recv(const std::string& tag_str, const char* worker, const zm
     exit(EXIT_FAILURE);
 }
 
-pid_t process_starter(const std::string& process_name){
+pid_t process_starter(const std::string& process_name, const std::vector<std::string>& extra_args = {}) {
     pid_t new_proc {fork()};
     if (new_proc == -1) {
         fatal("Errore fork " + process_name + ": " + strerror(errno));
     }
     else if (new_proc == 0) {
         std::string path {"./" + process_name + "/" + process_name};
-        execl(path.c_str(), process_name.c_str(), nullptr);
-        perror(("Errore execl " + process_name).c_str());
+        std::vector<char*> argv_vec;
+        argv_vec.push_back(const_cast<char*>(process_name.c_str()));
+        for (const auto& a : extra_args)
+            argv_vec.push_back(const_cast<char*>(a.c_str()));
+        argv_vec.push_back(nullptr);
+        execv(path.c_str(), argv_vec.data());
+        perror(("Errore execv " + process_name).c_str());
         exit(EXIT_FAILURE);
     }
-    
+
     return new_proc;
 }
 
@@ -208,7 +203,7 @@ void on_sigchld(int) {
         std::cerr << "Child " << pid << " ended execution shutting down\n";
         kill(0, SIGTERM);
     }
-    
+
 }
 
 void on_sigint(int) {
@@ -242,28 +237,55 @@ void wait_for_ready(zmq::socket_t& sync_socket, int expected) {
     }
 }
 
+static void print_usage(const char* prog) {
+    std::cerr << "Usage: " << prog << " <mode> [subfolder]\n"
+              << "  mode:      standard | overload\n"
+              << "  subfolder: optional name appended to " << CSV_DIR << "/ (default: root csv dir)\n";
+}
 
 
+int main(int argc, char* argv[]){
 
-int main(void){
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
+    }
 
-    // Create file for latencys
+    std::string mode {argv[1]};
+    std::string csv_dir {(argc >= 3) ? std::string{CSV_DIR} + "/" + argv[2] : std::string{CSV_DIR}};
+
+    Config cfg;
+    try {
+        cfg = load_config(CONF_PATH, mode);
+    } catch (const std::exception& e) {
+        std::cerr << "Config error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    }
+
+    // Ensure output directory exists
+    std::filesystem::create_directories(csv_dir);
+
+    // Create file for latencys (name based on timestamp)
     auto now = std::chrono::system_clock::now();
     std::time_t t = std::chrono::system_clock::to_time_t(now);
     char ts_buf[32];
     std::strftime(ts_buf, sizeof(ts_buf), "%Y%m%d_%H%M%S", std::localtime(&t));
-    std::string csv_path = std::string(LOG_DIR) + "/run_" + ts_buf + ".csv";
+    std::string csv_path = csv_dir + "/run_" + mode + "_" + ts_buf + ".csv";
     std::ofstream csv_file(csv_path);
-    // scrivi header
+    if (!csv_file.is_open()) {
+        std::cerr << "Cannot open CSV file: " << csv_path << '\n';
+        return EXIT_FAILURE;
+    }
     csv_file << "send_time_ns,exit_time_ns,sender_to_A_s,service_time_A_s,"
                 "A_to_B_s,service_time_B_s,B_to_sink_s,end_to_end_s,threads_A,threads_B,lambda,"
                 "queue_len_A,queue_len_B\n";
+
     // Variables for calculating system stability and little formula
     QueueState qsA {};
     QueueState qsB {};
     std::atomic<int> send_rate {15}; // rate at which the sender sends data in ms
     int old_rate {send_rate.load()};
-    
+
     Logger::instance().init(std::string(LOG_DIR) + "/main.log");
     signal(SIGINT, on_sigint);
     signal(SIGCHLD, on_sigchld);
@@ -285,8 +307,8 @@ int main(void){
     });
 
 
-   
-    // Starting contex
+
+    // Starting context
     zmq::context_t ctx {};
     zmq::socket_t orchestrator {ctx, zmq::socket_type::pub};
     zmq::socket_t sync_socket {ctx, zmq::socket_type::rep};
@@ -302,18 +324,19 @@ int main(void){
         fatal(std::string("orchestrator: ") + e.what());
     }
 
+    // Pass config path and mode to the sender so it can load its parameters
     pid_t p_child[PIPE_LENGTH] {
         process_starter("workerA"),
         process_starter("workerB"),
         process_starter("sink"),
-        process_starter("sender")
+        process_starter("sender", { mode })
     };
 
-    // Sync 
+    // Sync
     LOG_INFO("main", "Starting to wait for READY messages...");
     wait_for_ready(sync_socket, PIPE_LENGTH);
     LOG_INFO("main", "All processes synced and in execution");
-    
+
     // Start thread to check manual send rate update in cin
     std::thread rate_updater_thread(rate_updater, std::ref(send_rate));
 
@@ -327,7 +350,7 @@ int main(void){
     bool shutdown_sent {false};
     auto last_sink_latency_time = std::chrono::steady_clock::now();
     constexpr auto DRAIN_QUIET_TIME = std::chrono::seconds(2);
-    
+
     try {
         // Poll loop
         while (true) {
@@ -343,7 +366,7 @@ int main(void){
                 }
 
                 LOG_INFO("main", "sink: " + final_str + " dato arrivato al sink");
-                sync_socket.send(zmq_str(messages::OK), zmq::send_flags::none);  
+                sync_socket.send(zmq_str(messages::OK), zmq::send_flags::none);
                 break;
             }
 
@@ -379,15 +402,15 @@ int main(void){
                             std::string payload_str {static_cast<char*>(payload.data()), payload.size()};
                             int64_t int_arr_ns = std::stoll(payload_str);
                             double new_lambda = 1.0 / (int_arr_ns * 1e-9);
-                            qsA.lambda = alpha * new_lambda + (1.0 - alpha) * qsA.lambda;
+                            qsA.lambda = cfg.alpha * new_lambda + (1.0 - cfg.alpha) * qsA.lambda;
                             // Check if mu is not 0 (warmup is over)
                             double throughput_A = (qsA.mu_ema > 0.0 && qsA.threads > 0)
                                 ? qsA.mu_ema * qsA.threads
                                 : new_lambda;
-                            
-                            // Choose to use lambda_a or throughput, using min because throuput_A can be theorical and be higher than lambda 
-                            double lambda_B_instant = std::min(qsA.lambda, throughput_A); 
-                            qsB.lambda = alpha * lambda_B_instant + (1.0 - alpha) * qsB.lambda;
+
+                            // Choose to use lambda_a or throughput, using min because throuput_A can be theorical and be higher than lambda
+                            double lambda_B_instant = std::min(qsA.lambda, throughput_A);
+                            qsB.lambda = cfg.alpha * lambda_B_instant + (1.0 - cfg.alpha) * qsB.lambda;
                         } else if (tag_str == msg_types::SENDER_DONE) {
                             sender_done = true;
                             LOG_INFO("main", "Sender reported end of generation, waiting for pipeline drain");
@@ -398,8 +421,8 @@ int main(void){
                             last_sink_latency_time = std::chrono::steady_clock::now();
                             item_latency lat {};
                             memcpy(&lat, payload.data(), sizeof(item_latency));
-                            handle_item_latency(lat, qsA, topics::WORKERA, orchestrator);
-                            handle_item_latency(lat, qsB, topics::WORKERB, orchestrator);
+                            handle_item_latency(lat, qsA, topics::WORKERA, orchestrator, cfg);
+                            handle_item_latency(lat, qsB, topics::WORKERB, orchestrator, cfg);
 
                             csv_file << lat.send_time << ","
                                 << (lat.send_time + static_cast<int64_t>(lat.end_to_end * 1e9)) << ","
@@ -417,7 +440,7 @@ int main(void){
                         break;
                 }
             }
-            int curr_rate = send_rate.load(); 
+            int curr_rate = send_rate.load();
             if (curr_rate != old_rate) {
                 old_rate = curr_rate;
                 orchestrator.send(zmq_str(topics::SENDER), zmq::send_flags::sndmore);
@@ -434,8 +457,8 @@ int main(void){
                     LOG_INFO("main", "Drain period completed, SHUTDOWN broadcast sent");
                 }
             }
-        } 
-        
+        }
+
     }
     catch (const zmq::error_t& e) {
         fatal(std::string("Error waiting for sink END message: ") + e.what());
@@ -445,7 +468,7 @@ int main(void){
         orchestrator.send(zmq_str(topics::GLOBAL), zmq::send_flags::sndmore);
         orchestrator.send(zmq_str(messages::SHUTDOWN), zmq::send_flags::none);
     }
-    
+
     // Wait for all children to finish before closing sockets
     // IMPORTANT waitpid could return -1 with ECHILD errno if sigchild was previusly handeld, here is voluntarily ignored
     for (size_t i {0}; i < PIPE_LENGTH; i++)
@@ -455,6 +478,6 @@ int main(void){
     rate_updater_thread.join();
     metrics_exposer.stop();
     metrics_thread.join();
-    
+
     return 0;
 }

@@ -11,7 +11,8 @@ if(DEBUG_BUILD)
 endif()
 
 add_compile_definitions(LOG_DIR="${CMAKE_SOURCE_DIR}/logs")
-
+add_compile_definitions(CSV_DIR="${CMAKE_SOURCE_DIR}/csv")
+add_compile_definitions(CONF_PATH="${CMAKE_SOURCE_DIR}/config.yaml")
 
 # Richiesta delle librerie necessarie
 find_package(cppzmq REQUIRED)
@@ -29,9 +30,10 @@ add_executable(start
     common/logger.cpp
     common/scaling.cpp
     common/metrics.cpp
+    common/config.cpp
 )
 target_include_directories(start PRIVATE include)
-target_link_libraries(start PRIVATE cppzmq)
+target_link_libraries(start PRIVATE cppzmq yaml-cpp)
 
 # Aggiungi i processi come subdirectory
 add_subdirectory(sender)

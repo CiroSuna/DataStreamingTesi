@@ -374,8 +374,9 @@ def plot_arrival_vs_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
     q_out.columns = ["t_bin", "p25", "p50", "p75"]
     q_out["t"] = (q_out["t_bin"] + 0.5) * bin_s
 
-    in_col = "#1F77B4"
+    in_col  = "#1F77B4"
     out_col = "#2CA02C"
+    lam_col = "#9467BD"
 
     ax.plot(q_in["t"], q_in["p50"], color=in_col, linewidth=1.7, label="Arrival effettivo (p50)")
     ax.fill_between(q_in["t"], q_in["p25"], q_in["p75"], color=in_col, alpha=0.14)
@@ -383,10 +384,18 @@ def plot_arrival_vs_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
     ax.plot(q_out["t"], q_out["p50"], color=out_col, linewidth=1.9, label="Throughput effettivo (p50)")
     ax.fill_between(q_out["t"], q_out["p25"], q_out["p75"], color=out_col, alpha=0.14)
 
+    # λ EMA dal controller (colonna "lambda" nel CSV): mostra il lag dello stimatore
+    if "lambda" in df.columns:
+        agg_lam = aggregate_cross_run(df, "lambda", bin_s)
+        if not agg_lam.empty:
+            ax.plot(agg_lam["t"], agg_lam["p50"], color=lam_col,
+                    linewidth=1.4, linestyle="--", label="λ EMA controller (p50)")
+            ax.fill_between(agg_lam["t"], agg_lam["p25"], agg_lam["p75"],
+                            color=lam_col, alpha=0.10)
 
     ax.set_xlabel("Tempo relativo nella run (s)")
     ax.set_ylabel("Rate (items/s)")
-    ax.set_title("Arrival vs Throughput (effettivi)", fontsize=12)
+    ax.set_title("Arrival effettivo vs Throughput vs λ EMA controller", fontsize=12)
     ax.grid(linestyle="--", alpha=0.35)
     ax.legend(loc="upper right", fontsize=9)
     fig.tight_layout()
