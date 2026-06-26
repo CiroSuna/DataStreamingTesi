@@ -7,9 +7,9 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 .vscode/
-plots/
+/plots/
 __pycache__/
-good_run_csv/
-plots_bad/
-csv/
+/good_run_csv/
+/plots_bad/
+/csv/
 README.md

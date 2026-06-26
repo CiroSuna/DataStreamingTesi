@@ -1,0 +1,108 @@
+19:09:30 [INFO][workerA] Starting...
+19:09:30 [INFO][workerA] All connections established
+19:09:30 [INFO][workerA] Synchronized and ready
+19:09:30 [INFO][WorkerA] initial numebr of threads in worker A threadpool is: 10
+19:09:30 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:31 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:35 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:36 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:36 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:37 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:37 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:38 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:38 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:39 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:39 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:40 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:40 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:41 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:41 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:42 [INFO][WorkerA] Threadpool incremented by: 2
+19:09:43 [INFO][WorkerA] Threadpool decremented by: 2
+19:09:44 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:50 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:50 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:51 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:51 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:52 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:52 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:53 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:53 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:54 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:54 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:55 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:56 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:56 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:57 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:57 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:58 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:58 [INFO][WorkerA] Threadpool decremented by: 2
+19:10:59 [INFO][WorkerA] Threadpool incremented by: 2
+19:10:59 [INFO][WorkerA] Threadpool decremented by: 2
+19:11:00 [INFO][WorkerA] Threadpool incremented by: 2
+19:11:00 [INFO][WorkerA] Threadpool decremented by: 2
+19:11:01 [INFO][WorkerA] Threadpool incremented by: 2
+19:11:01 [INFO][WorkerA] Threadpool decremented by: 2
+19:11:02 [INFO][WorkerA] Threadpool incremented by: 2
+19:11:02 [INFO][WorkerA] Threadpool decremented by: 5
+19:11:03 [INFO][WorkerA] Threadpool incremented by: 5
+19:11:24 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:25 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:25 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:26 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:26 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:27 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:27 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:28 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:28 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:29 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:29 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:30 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:30 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:31 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:31 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:32 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:32 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:33 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:33 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:34 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:34 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:35 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:35 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:36 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:36 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:37 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:37 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:38 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:38 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:11:39 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:02 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:03 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:03 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:04 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:04 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:05 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:05 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:06 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:06 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:07 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:07 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:08 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:08 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:09 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:11 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:12 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:12 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:14 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:14 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:40 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:40 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:41 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:41 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:42 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:43 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:43 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:44 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:45 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:12:45 [INFO][WorkerA] Threadpool decrement skipped by: 0
+19:13:32 [INFO][workerA] Shutdown received, proceeding to close

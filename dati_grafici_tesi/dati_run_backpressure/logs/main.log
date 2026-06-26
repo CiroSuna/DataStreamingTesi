@@ -1,0 +1,11 @@
+19:09:30 [INFO][main] Starting to wait for READY messages...
+19:09:30 [INFO][main] Worker ready (1/4)
+19:09:30 [INFO][main] Worker ready (2/4)
+19:09:30 [INFO][main] Worker ready (3/4)
+19:09:30 [INFO][main] Worker ready (4/4)
+19:09:30 [INFO][main] All processes synced and in execution
+19:09:30 [INFO][main] Warmup complete: lambda=482.123176 mu=49.826519 W=0.020931
+19:09:30 [INFO][main] Warmup complete: lambda=398.248652 mu=19.973384 W=0.160296
+19:11:10 [INFO][main] Sender reported end of generation, waiting for pipeline drain
+19:13:32 [INFO][main] Drain period completed, SHUTDOWN broadcast sent
+19:13:32 [INFO][main] sink: END dato arrivato al sink

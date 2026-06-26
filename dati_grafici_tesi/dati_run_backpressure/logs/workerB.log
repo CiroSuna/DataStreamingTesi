@@ -1,0 +1,4 @@
+19:09:30 [INFO][workerB] Starting...
+19:09:30 [INFO][workerB] All connections established
+19:09:30 [INFO][workerB] Synchronized and ready
+19:13:32 [INFO][workerB] Shutdown received, proceeding to close
