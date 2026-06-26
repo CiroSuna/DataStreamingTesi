@@ -40,6 +40,7 @@ int main() {
         orchestrator_sub.connect(ipc_paths::orchestrator());
         sync_socket.connect(ipc_paths::sync_socket_path());
         recv_from_workerA.bind(ipc_paths::workerA_to_workerB());
+        send_to_sink.set(zmq::sockopt::sndhwm, 100);
         send_to_sink.connect(ipc_paths::workerB_to_sink());
         orchestrator_dealer.set(zmq::sockopt::routing_id, topics::WORKERB);
 

@@ -30,6 +30,9 @@ import pandas as pd
 
 
 # ── colori coerenti ─────────────────────────────────────────────────────────
+BP_STALL_COL    = "#D62728"
+THEORETICAL_COL = "#FF7F0E"
+
 INTER_COLOR  = "#4C72B0"
 INTRA_COLOR  = "#DD8452"
 THREAD_A_COL    = "#55A868"
@@ -106,6 +109,99 @@ def compute_input_rate_per_run(df: pd.DataFrame, bin_s: float) -> pd.DataFrame:
     )
     per_run["input_rate"] = per_run["count"] / bin_s
     return per_run[["run_id", "t_bin", "input_rate"]]
+
+
+def load_sinusoidal_config(config_path: str) -> dict:
+    """Load per-mode sinusoidal parameters from config.yaml without external dependencies."""
+    try:
+        raw: dict = {}
+        section = None
+        with open(config_path) as f:
+            for line in f:
+                line = line.rstrip()
+                if not line or line.lstrip().startswith("#"):
+                    continue
+                if not line.startswith(" "):
+                    section = line.rstrip(":").strip()
+                    raw[section] = {}
+                elif section and ":" in line:
+                    key, _, val = line.strip().partition(":")
+                    val = val.split("#")[0].strip()
+                    try:
+                        raw[section][key.strip()] = float(val)
+                    except ValueError:
+                        raw[section][key.strip()] = val
+
+        result = {}
+        for mode in ("standard", "overload"):
+            m = raw.get(mode, {})
+            if {"base_rate_ms", "amplitude_ms", "period_s"}.issubset(m):
+                result[mode] = {
+                    "base_rate_ms": m["base_rate_ms"],
+                    "amplitude_ms": m["amplitude_ms"],
+                    "period_s":     m["period_s"],
+                }
+        return result
+    except Exception:
+        return {}
+
+
+def _infer_mode(run_id: str) -> str:
+    """Extract mode from run_id like 'run_standard_20250101_120000'."""
+    parts = run_id.split("_")
+    return parts[1] if len(parts) >= 2 else "standard"
+
+
+def _theoretical_rate(t_s: np.ndarray, base_ms: float, amp_ms: float, period_s: float) -> np.ndarray:
+    """Sinusoidal target arrival rate (items/s) matching the sender formula."""
+    ia_ms = base_ms + amp_ms * np.sin(2.0 * np.pi * t_s / period_s)
+    return 1000.0 / np.maximum(ia_ms, 1.0)
+
+
+def compute_stall_proxy(df: pd.DataFrame, bin_s: float, sin_cfg: dict) -> pd.DataFrame:
+    """
+    Per time bin: stall_proxy = max(0, 1 - actual_rate / theoretical_rate).
+    stall_proxy > 0 means the sender was throttled by back-pressure below its
+    sinusoidal target. Returns p25/p50/p75 across runs plus the median theoretical rate.
+    """
+    in_per_run = compute_input_rate_per_run(df, bin_s)
+    if in_per_run.empty or not sin_cfg:
+        return pd.DataFrame(columns=["t", "p25", "p50", "p75", "theoretical_p50"])
+
+    all_bins: list[pd.DataFrame] = []
+    for run_id, grp in in_per_run.groupby("run_id"):
+        mode = _infer_mode(run_id)
+        params = sin_cfg.get(mode, sin_cfg.get("standard"))
+        if params is None:
+            continue
+        grp = grp.sort_values("t_bin").copy()
+        t_centers = (grp["t_bin"].values + 0.5) * bin_s
+        theo = _theoretical_rate(t_centers,
+                                 params["base_rate_ms"],
+                                 params["amplitude_ms"],
+                                 params["period_s"])
+        grp["theoretical"] = theo
+        grp["stall_proxy"] = (1.0 - grp["input_rate"] / grp["theoretical"]).clip(lower=0, upper=1.0)
+        all_bins.append(grp[["t_bin", "input_rate", "theoretical", "stall_proxy"]])
+
+    if not all_bins:
+        return pd.DataFrame(columns=["t", "p25", "p50", "p75", "theoretical_p50"])
+
+    combined = pd.concat(all_bins, ignore_index=True)
+    q = (combined.groupby("t_bin")["stall_proxy"]
+         .quantile([0.25, 0.5, 0.75])
+         .unstack()
+         .reset_index())
+    q.columns = ["t_bin", "p25", "p50", "p75"]
+    q["t"] = (q["t_bin"] + 0.5) * bin_s
+
+    q_theo = (combined.groupby("t_bin")["theoretical"]
+              .median()
+              .reset_index()
+              .rename(columns={"theoretical": "theoretical_p50"}))
+    q_theo["t"] = (q_theo["t_bin"] + 0.5) * bin_s
+
+    return q.merge(q_theo[["t_bin", "theoretical_p50"]], on="t_bin", how="left")
 
 
 def aggregate_cross_run(df: pd.DataFrame, value_col: str, bin_s: float) -> pd.DataFrame:
@@ -407,6 +503,67 @@ def plot_arrival_vs_throughput(df: pd.DataFrame, out_dir: Path, bin_s: float):
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Plot 7 – Arrival rate effettivo vs tasso teorico + stall proxy back-pressure
+# ════════════════════════════════════════════════════════════════════════════
+def plot_bp_evidence(df: pd.DataFrame, out_dir: Path, bin_s: float, sin_cfg: dict):
+    fig, ax1 = plt.subplots(figsize=(14, 5))
+    ax2 = ax1.twinx()
+
+    # ── arrival rate effettivo ───────────────────────────────────────────────
+    in_per_run = compute_input_rate_per_run(df, bin_s)
+    q_in = (in_per_run.groupby("t_bin")["input_rate"]
+            .quantile([0.25, 0.5, 0.75])
+            .unstack()
+            .reset_index())
+    q_in.columns = ["t_bin", "p25", "p50", "p75"]
+    q_in["t"] = (q_in["t_bin"] + 0.5) * bin_s
+
+    ax1.plot(q_in["t"], q_in["p50"], color="#1F77B4", linewidth=1.8,
+             label="Arrival rate effettivo (p50)")
+    ax1.fill_between(q_in["t"], q_in["p25"], q_in["p75"], color="#1F77B4", alpha=0.14)
+
+    # ── tasso teorico sinusoidale + stall proxy ──────────────────────────────
+    q_stall = compute_stall_proxy(df, bin_s, sin_cfg)
+
+    if not q_stall.empty:
+        if "theoretical_p50" in q_stall.columns:
+            ax1.plot(q_stall["t"], q_stall["theoretical_p50"],
+                     color=THEORETICAL_COL, linewidth=1.4, linestyle="--",
+                     label="Tasso teorico sinusoidale")
+
+        ax2.fill_between(q_stall["t"], 0, q_stall["p50"],
+                         color=BP_STALL_COL, alpha=0.30, label="BP stall proxy (p50)")
+        ax2.plot(q_stall["t"], q_stall["p50"],
+                 color=BP_STALL_COL, linewidth=1.3)
+        ax2.fill_between(q_stall["t"], q_stall["p25"], q_stall["p75"],
+                         color=BP_STALL_COL, alpha=0.12)
+        ax2.set_ylabel("Back-pressure stall fraction  [0 – 1]", color=BP_STALL_COL)
+        ax2.tick_params(axis="y", colors=BP_STALL_COL)
+        ax2.set_ylim(0, 1.05)
+    else:
+        print("  [warn] plot 07: nessun parametro sinusoidale trovato, "
+              "stall proxy omesso (controlla --config)")
+
+    ax1.set_xlabel("Tempo relativo nella run (s)")
+    ax1.set_ylabel("Arrival rate (items/s)")
+    ax1.grid(linestyle="--", alpha=0.35)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right", fontsize=9)
+
+    fig.suptitle(
+        "Back-pressure: arrival rate effettivo vs tasso teorico  (stall proxy = 1 − effettivo/teorico)",
+        fontsize=11,
+    )
+    fig.tight_layout()
+    out = out_dir / "07_bp_arrival_stall.pdf"
+    fig.savefig(out, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Salvato: {out}")
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # main
 # ════════════════════════════════════════════════════════════════════════════
 def main():
@@ -417,6 +574,8 @@ def main():
                         help="Cartella di output per i PDF (default: ./plots)")
     parser.add_argument("--bin-s", type=float, default=DEFAULT_BIN_S,
                         help="Ampiezza bin temporale in secondi per aggregazione cross-run")
+    parser.add_argument("--config", default="config.yaml",
+                        help="Path al config.yaml con i parametri sinusoidali (default: config.yaml)")
     parser.add_argument("csvfiles", nargs="*",
                         help="File CSV specifici (sovrascrive --log-dir)")
     args = parser.parse_args()
@@ -442,6 +601,10 @@ def main():
     df = load_all(csv_paths)
     print(f"  → {len(df):,} righe totali")
 
+    sin_cfg = load_sinusoidal_config(args.config)
+    if not sin_cfg:
+        print(f"  [warn] config.yaml non trovato in '{args.config}': plot 07 senza tasso teorico")
+
     print(f"\nGenero plot in {out_dir} ...")
     plot_inter_stage_boxplot(df, out_dir)
     plot_intra_stage_boxplot(df, out_dir)
@@ -449,6 +612,7 @@ def main():
     plot_e2e_latency(df, out_dir, args.bin_s)
     plot_throughput(df, out_dir, args.bin_s)
     plot_arrival_vs_throughput(df, out_dir, args.bin_s)
+    plot_bp_evidence(df, out_dir, args.bin_s, sin_cfg)
 
     print("\nDone.")
 

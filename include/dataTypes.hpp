@@ -46,6 +46,7 @@ namespace msg_types {
     constexpr const char* ITEM_LATENCY = "[ITEM_LATENCY]";
     constexpr const char* RATE_UPDATE = "[RATE_UPDATE]";
     constexpr const char* SENDER_DONE = "[SENDER_DONE]";
+    constexpr const char* BACKPRESSURE_STALL = "[BACKPRESSURE_STALL]";
 }
 
 // Sync/control messages

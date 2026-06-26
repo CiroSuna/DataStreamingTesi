@@ -39,6 +39,7 @@ int main(int argc, char* argv[]) {
     LOG_INFO("sender", "Sender sta iniziando eseczione");
     try {
         orchestrator_sub.connect(ipc_paths::orchestrator());
+        send_to_A.set(zmq::sockopt::sndhwm, 100);
         send_to_A.connect(ipc_paths::sender_to_workerA());
         sync_socket.connect(ipc_paths::sync_socket_path());
         orchestrator_dealer.set(zmq::sockopt::routing_id, routing_id);
@@ -70,9 +71,15 @@ int main(int argc, char* argv[]) {
     bool generation_done_notified {false};
     bool generating {true};
 
+    int64_t stall_ns {0};
+    auto last_bp_report = std::chrono::steady_clock::now();
+
     try {
         while (true) {
-            zmq::poll(items, 2, std::chrono::milliseconds(-1));
+            auto poll_start = std::chrono::steady_clock::now();
+            zmq::poll(items, 2, std::chrono::milliseconds(1));
+            int64_t poll_elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - poll_start).count();
 
             if (items[0].revents & ZMQ_POLLIN) {
                 zmq::message_t topic;
@@ -113,6 +120,21 @@ int main(int argc, char* argv[]) {
                     generation_done_notified = true;
                     LOG_INFO("sender", "Run timer reached, sender stopped generating new items");
                 }
+            }
+
+            if (generating && !(items[1].revents & ZMQ_POLLOUT)) {
+                stall_ns += poll_elapsed;
+            }
+
+            auto bp_now = std::chrono::steady_clock::now();
+            double window_ns = static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                bp_now - last_bp_report).count());
+            if (window_ns >= 100'000'000.0) {
+                double stall_fraction = stall_ns / window_ns;
+                orchestrator_dealer.send(zmq_str(msg_types::BACKPRESSURE_STALL), zmq::send_flags::sndmore);
+                orchestrator_dealer.send(zmq::buffer(std::to_string(stall_fraction)), zmq::send_flags::none);
+                stall_ns = 0;
+                last_bp_report = bp_now;
             }
 
             if (generating && (items[1].revents & ZMQ_POLLOUT)) {

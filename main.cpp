@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <zmq.hpp>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 #include <algorithm>
@@ -411,6 +412,10 @@ int main(int argc, char* argv[]){
                             // Choose to use lambda_a or throughput, using min because throuput_A can be theorical and be higher than lambda
                             double lambda_B_instant = std::min(qsA.lambda, throughput_A);
                             qsB.lambda = cfg.alpha * lambda_B_instant + (1.0 - cfg.alpha) * qsB.lambda;
+                        } else if (tag_str == msg_types::BACKPRESSURE_STALL) {
+                            std::string payload_str {static_cast<char*>(payload.data()), payload.size()};
+                            double fraction = std::stod(payload_str);
+                            Metrics::instance().set_sender_bp_stall(fraction);
                         } else if (tag_str == msg_types::SENDER_DONE) {
                             sender_done = true;
                             LOG_INFO("main", "Sender reported end of generation, waiting for pipeline drain");

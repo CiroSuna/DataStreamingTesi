@@ -35,10 +35,12 @@ public:
     void inc_worker_threads(int inc_value, const char* worker);
     void observe_item_latency(const item_latency& lat);
     void set_queue_state(double lambda, double mu, double W, int L, const char* worker);
+    void set_sender_bp_stall(double fraction);
     std::string get_metrics();
 private:
     Metrics();
     std::unordered_map<std::string, WorkerState> workers_info;
     std::unordered_map<std::string, LatencyHistogram> latencies;
+    double sender_bp_stall_fraction {0.0};
     std::mutex mutex;
 };

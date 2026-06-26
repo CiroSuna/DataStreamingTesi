@@ -33,7 +33,7 @@ add_executable(start
     common/config.cpp
 )
 target_include_directories(start PRIVATE include)
-target_link_libraries(start PRIVATE cppzmq yaml-cpp)
+target_link_libraries(start PRIVATE cppzmq yaml-cpp::yaml-cpp)
 
 # Aggiungi i processi come subdirectory
 add_subdirectory(sender)

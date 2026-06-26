@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <atomic>
 #include "threadPool.hpp"
 TEST_CASE("ThreadPool funzionalità complete", "[threadpool]") {
     ThreadPool pool(2);

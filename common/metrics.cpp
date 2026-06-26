@@ -109,6 +109,11 @@ void Metrics::set_queue_state(double lambda, double mu, double W, int L, const c
     workers_info[worker].L = L;
 }
 
+void Metrics::set_sender_bp_stall(double fraction) {
+    std::lock_guard<std::mutex> lock(mutex);
+    sender_bp_stall_fraction = fraction;
+}
+
 
 std::string Metrics::get_metrics() {
     std::ostringstream oss;
@@ -126,6 +131,10 @@ std::string Metrics::get_metrics() {
     emit_gauge("qs_mu", "Service rate mu (items/s per thread)", [](const WorkerState& ws){ return ws.mu; });
     emit_gauge("qs_W", "EMA sojourn time W (seconds)", [](const WorkerState& ws){ return ws.W; });
     emit_gauge("qs_L", "Estimated queue length via Little's Law",[](const WorkerState& ws){ return ws.L; });
+
+    oss << "# HELP sender_backpressure_stall_fraction Fraction of time sender was stalled by back pressure (0=none, 1=fully throttled)\n";
+    oss << "# TYPE sender_backpressure_stall_fraction gauge\n";
+    oss << "sender_backpressure_stall_fraction " << sender_bp_stall_fraction << "\n";
 
     for (const auto& [name, histogram] : latencies) {
         oss << histogram.serialize();
