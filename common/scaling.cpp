@@ -2,10 +2,20 @@
 #include "../include/dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
+#include "config.hpp"
 #include <algorithm>
 
 // Note: returns true if an update was sent
-bool thread_update(update_type type, QueueState& qs, const char* worker_topic, int inc_value, zmq::socket_t& update_socket, const int max_threads) {
+bool thread_update(
+    update_type type, 
+    QueueState& qs,
+    const char* worker_topic,
+    int inc_value, 
+    zmq::socket_t& update_socket, 
+    const int max_threads,
+    const int min_threads
+) {
+
     if (qs.pending_thread_update) {
         return false;
     }
@@ -18,7 +28,7 @@ bool thread_update(update_type type, QueueState& qs, const char* worker_topic, i
         }
         delta = std::min(delta, room);
     } else {
-        int removable = qs.threads - 1;
+        int removable = qs.threads - min_threads;
         if (removable <= 0) {
             return false;
         }
@@ -55,8 +65,8 @@ bool check_update_condition(
     bool scaledown_cond,
     int scaleup_delta,
     int scaledown_delta,
-    const int max_threads)
-{
+    Config cfg
+) {
     if (qs.pending_thread_update) return false;
     update_type type {};
     int delta = 0;
@@ -71,7 +81,7 @@ bool check_update_condition(
         return false;
     }
 
-    return thread_update(type, qs, worker_topic, delta, orchestrator, max_threads);
+    return thread_update(type, qs, worker_topic, delta, orchestrator, cfg.max_threads, cfg.min_threads);
 
     return false;
 }

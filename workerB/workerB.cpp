@@ -11,6 +11,7 @@
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
+#include "config.hpp"
 
 int fib(int n) {
     if (n <= 1) return n;
@@ -35,6 +36,13 @@ int main() {
     zmq::socket_t orchestrator_dealer {ctx, zmq::socket_type::dealer};
 
     LOG_DEBUG("workerB", "Sockets created");
+    Config cfg;
+    try {
+        cfg = load_config(CONF_PATH);
+    } catch (const std::exception& e) {
+        std::cerr << "Config error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    }
 
     try {
         orchestrator_sub.connect(ipc_paths::orchestrator());
@@ -66,15 +74,7 @@ int main() {
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> dist(0.0, 1.0);
 
-    ThreadPool pool {10};
-    try {
-        orchestrator_dealer.send(zmq_str(msg_types::THREAD_INC), zmq::send_flags::sndmore);
-        orchestrator_dealer.send(zmq_str("10"), zmq::send_flags::none);
-    }
-    catch (const zmq::error_t& e) {
-        LOG_INFO("WorkerB", std::string("workerB: failed to send THREAD_INC to orchestrator: ") + e.what());
-        exit(EXIT_FAILURE);
-    }
+    ThreadPool pool {cfg.min_threads};
 
     zmq::pollitem_t items[] = {
         { recv_from_workerA, 0, ZMQ_POLLIN, 0 },

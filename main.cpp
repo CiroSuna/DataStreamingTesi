@@ -126,19 +126,19 @@ void process_worker_latency_common(
     // c_min based scale decision
     check_update_condition(qs, worker, orchestrator,
                            qs.threads < c_min, qs.threads > c_min,
-                           c_min - qs.threads, 5, cfg.max_threads);
+                           c_min - qs.threads, 5, cfg);
 
     if (!realistic_latency_check(qs, W_max_p99)) return;
 
     // p50 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p50_window > W_max_p50, p50_window < 0.8 * W_max_p50,
-                           1, 2, cfg.max_threads);
+                           1, 2, cfg);
 
     // p99 based scale decision
     check_update_condition(qs, worker, orchestrator,
                            p99_window > W_max_p99, p99_window < 0.8 * W_max_p99,
-                           1, 5, cfg.max_threads);
+                           1, 5, cfg);
 }
 
 
@@ -284,6 +284,10 @@ int main(int argc, char* argv[]){
     // Variables for calculating system stability and little formula
     QueueState qsA {};
     QueueState qsB {};
+    qsA.threads = cfg.min_threads;
+    qsB.threads = cfg.min_threads;
+    Metrics::instance().inc_worker_threads(cfg.min_threads, topics::WORKERA);
+    Metrics::instance().inc_worker_threads(cfg.min_threads, topics::WORKERB);
     std::atomic<int> send_rate {15}; // rate at which the sender sends data in ms
     int old_rate {send_rate.load()};
 

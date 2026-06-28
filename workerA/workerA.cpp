@@ -11,6 +11,7 @@
 #include "dataTypes.hpp"
 #include "utils.hpp"
 #include "logger.hpp"
+#include "config.hpp"
 
 int fib(int n) {
     if (n <= 1) return n;
@@ -23,7 +24,6 @@ int fib(int n) {
     return b;
 }
 
-constexpr const int inital_pool_threads = 10;
 
 int main() {
     Logger::instance().init(std::string(LOG_DIR) + "/workerA.log");
@@ -37,6 +37,14 @@ int main() {
     zmq::socket_t orchestrator_dealer {ctx, zmq::socket_type::dealer};
 
     LOG_DEBUG("workerA", "Sockets created");
+
+    Config cfg;
+    try {
+        cfg = load_config(CONF_PATH);
+    } catch (const std::exception& e) {
+        std::cerr << "Config error: " << e.what() << '\n';
+        return EXIT_FAILURE;
+    }
 
     try {
         orchestrator_sub.connect(ipc_paths::orchestrator());
@@ -70,17 +78,8 @@ int main() {
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<double> dist(0.0, 1.0);
 
-    ThreadPool pool {inital_pool_threads};
-    LOG_INFO("WorkerA", "initial numebr of threads in worker A threadpool is: " + std::to_string(inital_pool_threads));
+    ThreadPool pool {cfg.min_threads};
 
-    try {
-        orchestrator_dealer.send(zmq_str(msg_types::THREAD_INC), zmq::send_flags::sndmore);
-        orchestrator_dealer.send(zmq_str("10"), zmq::send_flags::none);
-    }
-    catch(zmq::error_t& e) {
-        LOG_INFO("WorkerA", std::string("workerA: failed to send THRAD_INC to orchestrator: ") + e.what());
-        exit(EXIT_FAILURE);
-    }
 
     zmq::pollitem_t items[] = {
         { recv_from_sender, 0, ZMQ_POLLIN, 0 },

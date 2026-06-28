@@ -16,6 +16,7 @@ struct Config {
     double alpha;
     double p_target;
     int max_threads;
+    int min_threads;
     int pause_time_ms;
     int percentile_window;
     int warmup_items;
@@ -23,4 +24,4 @@ struct Config {
 
 // Load the section [mode] from a YAML config file.
 // Throws std::runtime_error on missing file, missing section, or missing key.
-Config load_config(const std::string& path, const std::string& mode);
+Config load_config(const std::string& path, const std::string& mode = "");

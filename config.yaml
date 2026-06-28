@@ -2,10 +2,12 @@
 global:
   alpha: 0.1              # EMA smoothing factor
   p_target: 0.7           # target utilisation per worker thread
-  max_threads: 80         # upper bound on worker threads
+  max_threads: 30        # upper bound on worker threads
+  min_threads: 30
   pause_time_ms: 500      # minimum ms between consecutive scaling decisions
   percentile_window: 200  # sliding window size for p99/p50 computation (~1 s at 200 items/s)
   warmup_items: 20        # items collected before scaling logic activates
+  
 
 # Standard load: inter-arrival rate stays within the pipeline's max capacity.
 # WorkerB bottleneck ~400 items/s (20 threads × 1/50ms).

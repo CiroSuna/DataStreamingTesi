@@ -4,6 +4,7 @@
 #include <chrono>
 #include <zmq.hpp>
 #include "dataTypes.hpp"
+#include "config.hpp"
 
 struct QueueState {
     double lambda {0.0};
@@ -33,4 +34,4 @@ bool check_update_condition(
     bool scaledown_cond,
     int scaleup_delta,
     int scaledown_delta,
-    const int max_threads);
+    Config cfg);
